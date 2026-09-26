@@ -40,6 +40,7 @@ Requirements:
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import math
 import os
@@ -51,12 +52,13 @@ import sys
 import tempfile
 import threading
 import tkinter as tk
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable, cast
+from typing import cast
 
 import cv2
 import numpy as np
@@ -274,20 +276,49 @@ def probe_camera_capabilities(cv_target: int | str) -> tuple[list[str], list[int
         cap.release()
 
 
+def parse_v4l2_mjpeg_sizes(list_formats_stderr: str) -> list[str]:
+    """Extract MJPEG frame sizes from ``ffmpeg -f v4l2 -list_formats all`` stderr.
+
+    Recording always requests ``-input_format mjpeg`` on Linux, so only the
+    MJPEG line matters, e.g.::
+
+        [video4linux2,v4l2 @ 0x..] Compressed: mjpeg : Motion-JPEG : 1280x720 640x480
+    """
+    for line in list_formats_stderr.splitlines():
+        if "Compressed" in line and "mjpeg" in line.lower():
+            return re.findall(r"\b\d+x\d+\b", line.rsplit(":", 1)[-1])
+    return []
+
+
+def list_v4l2_mjpeg_sizes(device_path: str) -> list[str]:
+    stderr_text = _run_ffmpeg_device_listing(
+        get_ffmpeg_path(), ["-hide_banner", "-f", "v4l2", "-list_formats", "all", "-i", device_path]
+    )
+    return parse_v4l2_mjpeg_sizes(stderr_text)
+
+
 def probe_camera_for_gui(device: CameraDevice, order_index: int) -> tuple[list[str], list[int]]:
     """Probe a camera for the GUI, guessing an OpenCV target for it.
 
-    On Linux the ffmpeg device path doubles as a valid OpenCV target. On
-    macOS/Windows there is no guaranteed index mapping, so the camera's
+    On Linux the resolution list comes from the driver's real MJPEG sizes (via
+    ffmpeg), since OpenCV's set-and-read-back probe often reports a single
+    size -- e.g. only 1280x720 for a built-in laptop webcam that also offers
+    640x480. On Linux the ffmpeg device path doubles as a valid OpenCV target.
+    On macOS/Windows there is no guaranteed index mapping, so the camera's
     position in the enumerated list is used as a best-effort guess; if it's
     wrong, probing simply fails open and defaults are used instead (the
     resolution/fps fields remain editable either way).
     """
     target: int | str = device.id if device.backend == "v4l2" else order_index
     try:
-        return probe_camera_capabilities(target)
+        resolutions, fps_values = probe_camera_capabilities(target)
     except Exception:
-        return default_resolutions(), default_fps_values()
+        resolutions, fps_values = default_resolutions(), default_fps_values()
+    if device.backend == "v4l2":
+        mjpeg_sizes = list_v4l2_mjpeg_sizes(device.id)
+        if mjpeg_sizes:
+            resolutions = mjpeg_sizes
+    return resolutions, fps_values
 
 
 def _pick_default(options: list[str], preferred: str) -> str:
@@ -423,11 +454,11 @@ def build_output_filename(camera_index: int, session_name: str) -> str:
 _VAILA_CONFIG_PATH = Path.home() / ".vaila" / "vaila_config.toml"
 
 
-def load_last_output_dir() -> str:
-    """Read the last-used output directory, or "" if none saved/readable.
+def load_config_value(section: str, key: str) -> str:
+    """Read ``[section] key`` from the vailá config, or "" if none saved/readable.
 
-    Deliberately never raises: a corrupt or missing config must not stop the
-    tool from opening, it just falls back to an empty output-dir field.
+    Deliberately never raises: a corrupt or missing config must not stop a
+    tool from opening, it just falls back to an empty field.
     """
     if not _VAILA_CONFIG_PATH.is_file():
         return ""
@@ -436,25 +467,35 @@ def load_last_output_dir() -> str:
 
         config = toml.load(_VAILA_CONFIG_PATH)
     except Exception as exc:  # noqa: BLE001
-        print(f">> vaila/multicam_recorder: ignoring unreadable config {_VAILA_CONFIG_PATH}: {exc}")
+        print(f">> vaila/{section}: ignoring unreadable config {_VAILA_CONFIG_PATH}: {exc}")
         return ""
-    return config.get("multicam_recorder", {}).get("last_output_dir", "")
+    return str(config.get(section, {}).get(key, ""))
 
 
-def save_last_output_dir(output_dir: str) -> None:
-    """Persist ``output_dir`` so the next session starts with it pre-filled."""
+def save_config_value(section: str, key: str, value: str) -> None:
+    """Persist ``[section] key = value``, keeping every other setting in the file."""
     try:
         import toml
 
         config = {}
         if _VAILA_CONFIG_PATH.is_file():
             config = toml.load(_VAILA_CONFIG_PATH)
-        config.setdefault("multicam_recorder", {})["last_output_dir"] = output_dir
+        config.setdefault(section, {})[key] = value
         _VAILA_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(_VAILA_CONFIG_PATH, "w", encoding="utf-8") as fh:
             toml.dump(config, fh)
     except Exception as exc:  # noqa: BLE001
-        print(f">> vaila/multicam_recorder: could not save config {_VAILA_CONFIG_PATH}: {exc}")
+        print(f">> vaila/{section}: could not save config {_VAILA_CONFIG_PATH}: {exc}")
+
+
+def load_last_output_dir() -> str:
+    """Read the last-used output directory, or "" if none saved/readable."""
+    return load_config_value("multicam_recorder", "last_output_dir")
+
+
+def save_last_output_dir(output_dir: str) -> None:
+    """Persist ``output_dir`` so the next session starts with it pre-filled."""
+    save_config_value("multicam_recorder", "last_output_dir", output_dir)
 
 
 # ── Live preview (owns OpenCV capture/window, pre-recording only) ──────────
@@ -666,7 +707,9 @@ class CameraPreviewController:
         existing = self._slots.pop(camera_id, None)
         if existing is not None:
             existing.close()
-        self.start(camera_id, cv_target, label, on_stopped, framerate=framerate, video_size=video_size)
+        self.start(
+            camera_id, cv_target, label, on_stopped, framerate=framerate, video_size=video_size
+        )
 
     def stop(self, camera_id: str) -> None:
         slot = self._slots.pop(camera_id, None)
@@ -684,10 +727,8 @@ class CameraPreviewController:
 
     def _close_window(self) -> None:
         if self._window_open:
-            try:
+            with contextlib.suppress(cv2.error):
                 cv2.destroyWindow(_PREVIEW_WINDOW_TITLE)
-            except cv2.error:
-                pass
             self._window_open = False
 
     def poll(self) -> None:
@@ -779,9 +820,7 @@ class MulticamRecorderController:
         """
         session_dir.mkdir(parents=True, exist_ok=True)
         if self._preview_snapshot_dir is None:
-            self._preview_snapshot_dir = Path(
-                tempfile.mkdtemp(prefix="vaila_multicam_preview_")
-            )
+            self._preview_snapshot_dir = Path(tempfile.mkdtemp(prefix="vaila_multicam_preview_"))
         cli_lines: list[str] = []
         snapshot_paths: dict[str, Path] = {}
         for index, (camera, framerate, video_size) in enumerate(cameras, start=1):
@@ -880,7 +919,7 @@ class _CameraRow:
         device: CameraDevice,
         resolutions: list[str],
         fps_values: list[int],
-        on_preview: Callable[["_CameraRow"], None],
+        on_preview: Callable[[_CameraRow], None],
     ) -> None:
         self.device = device
         self.var_selected = tk.BooleanVar(value=True)

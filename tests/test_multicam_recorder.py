@@ -250,3 +250,26 @@ def test_controller_poll_disconnected_reports_dead_process_once(monkeypatch, tmp
     assert dead[0].camera.id == camera.id
 
     assert controller.poll_disconnected() == []
+
+
+# ── parse_v4l2_mjpeg_sizes ───────────────────────────────────────────────────
+
+
+def test_parse_v4l2_mjpeg_sizes_reads_only_the_mjpeg_line():
+    stderr_text = (
+        "[video4linux2,v4l2 @ 0x1] Raw       :     yuyv422 :           YUYV 4:2:2 : "
+        "1280x720 320x240\n"
+        "[video4linux2,v4l2 @ 0x1] Compressed:       mjpeg :          Motion-JPEG : "
+        "1280x720 1280x800 640x480 320x240 160x120\n"
+    )
+    assert multicam_recorder.parse_v4l2_mjpeg_sizes(stderr_text) == [
+        "1280x720",
+        "1280x800",
+        "640x480",
+        "320x240",
+        "160x120",
+    ]
+
+
+def test_parse_v4l2_mjpeg_sizes_empty_when_no_mjpeg():
+    assert multicam_recorder.parse_v4l2_mjpeg_sizes("Raw : yuyv422 : YUYV : 640x480") == []

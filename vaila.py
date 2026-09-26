@@ -428,7 +428,7 @@ C_B_r2_c1 - Compress Video C_B_r2_c2 - Video Stabilizer C_B_r2_c3 - Make Sync fi
 C_B_r3_c1 - GetPixelCoord C_B_r3_c2 - Metadata info  C_B_r3_c3 - Merge|Split Video
 C_B_r4_c1 - Distort Video/data C_B_r4_c2 - Cut Video  C_B_r4_c3 - Resize Video
 C_B_r5_c1 - YT Downloader C_B_r5_c2 - Insert Audio   C_B_r5_c3 - rm Dup PNG
-C_B_r6_c1 - Record Cameras
+C_B_r6_c1 - Record Cameras C_B_r6_c2 - Cut Cameras
 
 -> C_C: Visualization
 C_C_r1_c1 - Show C3D      C_C_r1_c2 - Show CSV 3D    C_C_r2_c1 - Plot 2D
@@ -1581,6 +1581,14 @@ class Vaila(tk.Tk):
             width=button_width,
         )
 
+        # C_B_r6_c2 - Video: Cut N synchronized cameras at once (mosaic view)
+        cut_cameras_btn = tk.Button(
+            tools_col2,
+            text="Cut Cameras",
+            command=self.cut_cameras,
+            width=button_width,
+        )
+
         # Packing Video buttons
         extract_png_btn.grid(row=0, column=0, padx=2, pady=2)
         planar_geo_btn.grid(row=0, column=1, padx=2, pady=2)
@@ -1598,6 +1606,7 @@ class Vaila(tk.Tk):
         iaudiovid_btn.grid(row=4, column=1, padx=2, pady=2)
         remove_duplicate_frames_btn.grid(row=4, column=2, padx=2, pady=2)
         record_cameras_btn.grid(row=5, column=0, padx=2, pady=2)
+        cut_cameras_btn.grid(row=5, column=1, padx=2, pady=2)
         tools_col2.pack(side="left", fill="both", expand=True, padx=5, pady=5)
 
         ## VVVVVVVVVVVVVVV VISUALIZATION BUTTONS VVVVVVVVVVVVVVVV
@@ -3267,6 +3276,18 @@ class Vaila(tk.Tk):
         from vaila import multicam_recorder
 
         multicam_recorder.run_multicam_recorder(parent=self)
+
+    # C_B_r6_c2
+    def cut_cameras(self):
+        """Open the synchronized multi-camera cut tool.
+
+        Shows every video of a session folder (e.g. from Record Cameras) in one
+        mosaic with a shared timeline and per-camera frame offsets, then cuts
+        all cameras with a single Start/End pair.
+        """
+        from vaila import multicam_cut
+
+        multicam_cut.run_multicam_cut(parent=self)
 
     # C_C_r1_c1
     def show_c3d_data(self):

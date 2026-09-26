@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>vailá - multicam_cut</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 40px;
+        line-height: 1.6;
+        background-color: #f5f5f5;
+      }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: white;
+        padding: 30px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        color: #2c3e50;
+        border-bottom: 3px solid #3498db;
+        padding-bottom: 10px;
+      }
+      h2 {
+        color: #34495e;
+        margin-top: 30px;
+      }
+      h3 {
+        color: #2c3e50;
+      }
+      .module-info {
+        background: #ecf0f1;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 20px 0;
+      }
+      .functions {
+        background: #f8f9fa;
+        padding: 15px;
+        border-left: 4px solid #28a745;
+        margin: 15px 0;
+      }
+      .docstring {
+        background: #fff3cd;
+        padding: 15px;
+        border-left: 4px solid #ffc107;
+        margin: 15px 0;
+      }
+      .cli-section {
+        background: #e8f4f8;
+        padding: 15px;
+        border-left: 4px solid #17a2b8;
+        margin: 15px 0;
+      }
+      .warning-section {
+        background: #fdecea;
+        padding: 15px;
+        border-left: 4px solid #e74c3c;
+        margin: 15px 0;
+      }
+      code {
+        background: #e9ecef;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-family: monospace;
+      }
+      pre {
+        background: #2d2d2d;
+        color: #f8f8f2;
+        padding: 15px;
+        border-radius: 5px;
+        overflow-x: auto;
+      }
+      .footer {
+        margin-top: 40px;
+        padding-top: 20px;
+        border-top: 1px solid #dee2e6;
+        color: #6c757d;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1><i>vailá</i> - multicam_cut</h1>
+
+      <div class="module-info">
+        <h3>📋 Module Information</h3>
+        <p><strong>Category:</strong> Tools</p>
+        <p><strong>File:</strong> vaila/multicam_cut.py</p>
+        <p><strong>Version:</strong> 0.4.5</p>
+        <p><strong>GUI Interface:</strong> ✅ Yes</p>
+        <p><strong>CLI Interface:</strong> ⚠️ Partial (<code>uv run python vaila/multicam_cut.py [session_dir]</code> opens the GUI on that folder)</p>
+      </div>
+
+      <div class="docstring">
+        <h3>📖 Description</h3>
+        <p>
+          Cuts every video of a multi-camera session <strong>at once, keeping
+          them synchronized</strong>. All cameras are shown side by side in one
+          mosaic window, driven by one shared timeline with three handles:
+          <strong style="color:#1e8e3e">green ▲ Start</strong>,
+          <strong style="color:#d93025">red ▲ End</strong> and a
+          <strong style="color:#1a73e8">blue cursor</strong> showing the video
+          at that instant.
+        </p>
+        <p>
+          The timeline is in <strong>time (seconds), not frames</strong>:
+          webcams often run at different and variable frame rates (e.g. a
+          1280x720 camera limited by USB bandwidth to ~8 fps next to 30 fps
+          cameras). Each camera maps timeline time to its own frame using the
+          real packet timestamps of the file, so a cut keeps every camera on
+          the same instant, each with its own number of frames.
+        </p>
+        <p>
+          Each camera has an <strong>offset in milliseconds</strong>
+          (<code>camera time = timeline time + offset</code>); one arrow click
+          moves it by one frame of that camera. Step it until a sharp event
+          (clap, flash) lines up in every tile.
+        </p>
+        <ul>
+          <li><strong>Mosaic view</strong>, each tile showing its own frame number and fps; tiles turn green inside Start/End</li>
+          <li><strong>Range timeline</strong>: drag Start/End (the mosaic follows the handle) and the cursor; click to jump</li>
+          <li><strong>Common range highlight</strong>: where every camera has video is shaded blue; Start/End stay inside it</li>
+          <li><strong>Frame-accurate cut</strong> (hardware H.264 when available, CPU <code>libx264</code> fallback) that keeps each frame's real timestamp</li>
+          <li><strong>Background cutting</strong> with Cancel; prints the equivalent <code>ffmpeg</code> command per camera</li>
+          <li><strong>Reproducible output</strong>: <code>multicam_cut.toml</code> records times, offsets and frame ranges</li>
+          <li><strong>Remembers the last session</strong> (<code>~/.vaila/vaila_config.toml</code>): the folder field comes pre-filled (Enter reloads it) and <strong>Browse...</strong> opens in the folder that holds your sessions</li>
+        </ul>
+      </div>
+
+      <div class="cli-section">
+        <h3>🚀 Usage</h3>
+        <p>
+          <strong>GUI:</strong> select <strong>Cut Cameras</strong> in
+          <i>vailá</i>'s Video and Image tools (next to Record Cameras).
+        </p>
+        <ol>
+          <li><strong>Browse...</strong> to a session folder (at least 2 videos).</li>
+          <li>If needed, step each camera's <strong>Offset (ms)</strong> until a sharp event lines up in every tile.</li>
+          <li>Drag the green ▲ to the start and the red ▲ to the end (or press <strong>i</strong> / <strong>o</strong> at the cursor).</li>
+          <li>Click <strong>Cut all cameras</strong>.</li>
+        </ol>
+        <p>
+          <strong>Keys</strong> (control or mosaic window):
+          <code>Space</code> play/pause · <code>a</code>/<code>d</code> ±1 frame ·
+          <code>j</code>/<code>l</code> ±10 frames · <code>i</code>/<code>o</code> Start/End at cursor
+        </p>
+        <p><strong>Standalone:</strong></p>
+        <pre>uv run python vaila/multicam_cut.py /path/to/session_dir</pre>
+        <p><strong>Output:</strong></p>
+        <pre>&lt;session_dir&gt;/processed_multicam_cut_YYYYMMDD_HHMMSS/
+    cam1_trial01_frame_&lt;a&gt;_to_&lt;b&gt;.mp4
+    cam2_trial01_frame_&lt;a&gt;_to_&lt;b&gt;.mp4
+    multicam_cut.toml</pre>
+        <p>Frame numbers are 1-based, inclusive. All outputs cover the same time span.</p>
+      </div>
+
+      <div class="functions">
+        <h3>🔧 Main Functions</h3>
+        <ul>
+          <li><code>discover_session_videos</code> — Session videos in natural camera order</li>
+          <li><code>read_frame_times</code> / <code>frame_index_at</code> — Real per-frame timestamps and time→frame lookup</li>
+          <li><code>timeline_bounds</code> / <code>common_range</code> — Timeline math (seconds) with per-camera offsets</li>
+          <li><code>validate_cut</code> / <code>camera_frame_ranges</code> — Validate a cut and map it to each camera's frames</li>
+          <li><code>cut_camera</code> — ffmpeg cut keeping real frame timestamps</li>
+          <li><code>RangeTimeline</code> — Start / cursor / End timeline widget</li>
+          <li><code>build_cut_report</code> — TOML record of the cut</li>
+          <li><code>MulticamCutApp</code> — Tkinter control window + cv2 mosaic</li>
+          <li><code>run_multicam_cut</code> — GUI entry point</li>
+        </ul>
+      </div>
+
+      <div class="warning-section">
+        <h3>⚠️ Known Limitations (v1)</h3>
+        <ul>
+          <li>Alignment is manual (no automatic clap/flash detection yet).</li>
+          <li>A camera at a much lower frame rate (e.g. ~8 fps) limits timing precision for that view.</li>
+          <li>Output is re-encoded (H.264) for frame accuracy, not stream-copied.</li>
+        </ul>
+      </div>
+
+      <div class="footer">
+        <p>📅 Updated: 26/09/2026</p>
+        <p>🔗 Part of <i>vailá</i> - Multimodal Toolbox</p>
+        <p>
+          🌐
+          <a href="https://github.com/vaila-multimodaltoolbox/vaila"
+            >GitHub Repository</a
+          >
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
