@@ -6,7 +6,7 @@ Author: Carlos Pinto Jr
 Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 26 September 2026
-Update Date: 26 September 2026
+Update Date: 10 October 2026
 Version: 0.4.5
 
 Description:
@@ -44,6 +44,7 @@ import contextlib
 import glob
 import math
 import os
+import queue
 import re
 import shlex
 import shutil
@@ -124,10 +125,24 @@ def _enumerate_cameras_linux() -> list[CameraDevice]:
     ]
 
 
+def _open_capture(cv_target: int | str) -> cv2.VideoCapture:
+    """Open an OpenCV capture, forcing the V4L2 backend for device paths.
+
+    With the automatic backend, once a ``/dev/videoN`` stream has failed in
+    this process (e.g. VIDIOC_STREAMON -> ENOSPC, USB controller out of
+    bandwidth), every later open of that path fails too, even after the
+    bandwidth is freed — so a camera could never be retried without
+    restarting vailá. Asking for CAP_V4L2 explicitly reopens it fine.
+    """
+    if isinstance(cv_target, str):
+        return cv2.VideoCapture(cv_target, cv2.CAP_V4L2)
+    return cv2.VideoCapture(cv_target)
+
+
 def _is_capturable_v4l2_device(path: str) -> bool:
     """Return True if OpenCV can actually open ``path`` as a capture device."""
     try:
-        cap = cv2.VideoCapture(path)
+        cap = _open_capture(path)
     except Exception:
         return False
     try:
@@ -251,7 +266,7 @@ def probe_camera_capabilities(cv_target: int | str) -> tuple[list[str], list[int
     the same device immediately afterwards without a "device busy" error.
     Falls back to sane defaults if OpenCV can't open the device.
     """
-    cap = cv2.VideoCapture(cv_target)
+    cap = _open_capture(cv_target)
     try:
         if not cap.isOpened():
             return default_resolutions(), default_fps_values()
@@ -534,6 +549,7 @@ def _scrub_cv2_qt_plugin_env() -> None:
 
 _PREVIEW_WINDOW_TITLE = "vailá - Camera Preview"
 _PREVIEW_TILE_SIZE = (240, 180)  # (width, height) per camera, kept small on purpose
+_STATUS_NO_IMAGE = "no image (USB)"  # row status when a preview never got a frame
 
 
 class _LivePreviewSlot:
@@ -551,7 +567,9 @@ class _LivePreviewSlot:
 
     is_recording_snapshot = False
 
-    def __init__(self, cap: cv2.VideoCapture, label: str, on_stopped: Callable[[], None]) -> None:
+    def __init__(
+        self, cap: cv2.VideoCapture, label: str, on_stopped: Callable[[bool], None]
+    ) -> None:
         self.label = label
         self.on_stopped = on_stopped
         self._cap = cap
@@ -559,6 +577,7 @@ class _LivePreviewSlot:
         self._stop_event = threading.Event()
         self._latest: np.ndarray | None = None
         self._alive = True
+        self.got_frame = False
         self._thread = threading.Thread(target=self._drain, daemon=True)
         self._thread.start()
 
@@ -570,6 +589,7 @@ class _LivePreviewSlot:
                     self._alive = False
                     return
                 self._latest = frame
+                self.got_frame = True
 
     def latest_frame(self) -> tuple[bool, np.ndarray | None]:
         """Return (alive, frame). ``frame`` is None until the first read lands."""
@@ -594,7 +614,7 @@ class _SnapshotPreviewSlot:
 
     is_recording_snapshot = True
 
-    def __init__(self, jpg_path: Path, label: str, on_stopped: Callable[[], None]) -> None:
+    def __init__(self, jpg_path: Path, label: str, on_stopped: Callable[[bool], None]) -> None:
         self.label = label
         self.on_stopped = on_stopped
         self._jpg_path = jpg_path
@@ -650,7 +670,7 @@ class CameraPreviewController:
         camera_id: str,
         cv_target: int | str,
         label: str,
-        on_stopped: Callable[[], None],
+        on_stopped: Callable[[bool], None],
         *,
         framerate: int | None = None,
         video_size: str | None = None,
@@ -658,11 +678,21 @@ class CameraPreviewController:
         if camera_id in self._slots:
             return
 
-        cap = cv2.VideoCapture(cv_target)
+        cap = _open_capture(cv_target)
         if not cap.isOpened():
             cap.release()
-            on_stopped()
+            on_stopped(True)
             return
+        if isinstance(cv_target, str):
+            # V4L2 path: ask for MJPEG like the ffmpeg recording does, instead
+            # of OpenCV's default uncompressed YUYV, so cameras that offer
+            # several USB alt settings can pick a smaller isochronous one.
+            # (Some cameras, e.g. DV20, have a single alt setting reserving
+            # ~a whole USB 2.0 bus regardless of format: two on one controller
+            # fail VIDIOC_STREAMON with ENOSPC — only another port fixes that.)
+            # Must be set before the frame size, or the driver may reject it.
+            mjpg = cv2.VideoWriter_fourcc(*"MJPG")  # ty: ignore[unresolved-attribute]
+            cap.set(cv2.CAP_PROP_FOURCC, mjpg)
         if video_size:
             try:
                 width, height = (int(part) for part in video_size.lower().split("x"))
@@ -679,7 +709,7 @@ class CameraPreviewController:
         self._slots[camera_id] = _LivePreviewSlot(cap, label, on_stopped)
 
     def show_snapshot(
-        self, camera_id: str, jpg_path: Path, label: str, on_stopped: Callable[[], None]
+        self, camera_id: str, jpg_path: Path, label: str, on_stopped: Callable[[bool], None]
     ) -> None:
         """Show/switch this camera's tile to ffmpeg's recording-time snapshot JPEG.
 
@@ -693,25 +723,7 @@ class CameraPreviewController:
             _restore_cv2_qt_plugin_env()
         self._slots[camera_id] = _SnapshotPreviewSlot(jpg_path, label, on_stopped)
 
-    def show_live(
-        self,
-        camera_id: str,
-        cv_target: int | str,
-        label: str,
-        on_stopped: Callable[[], None],
-        *,
-        framerate: int | None = None,
-        video_size: str | None = None,
-    ) -> None:
-        """Switch this camera's tile back to a live capture once recording stops."""
-        existing = self._slots.pop(camera_id, None)
-        if existing is not None:
-            existing.close()
-        self.start(
-            camera_id, cv_target, label, on_stopped, framerate=framerate, video_size=video_size
-        )
-
-    def stop(self, camera_id: str) -> None:
+    def stop(self, camera_id: str, *, failed: bool = False) -> None:
         slot = self._slots.pop(camera_id, None)
         if slot is None:
             return
@@ -719,7 +731,7 @@ class CameraPreviewController:
         if not self._slots:
             self._close_window()
             _scrub_cv2_qt_plugin_env()
-        slot.on_stopped()
+        slot.on_stopped(failed)
 
     def stop_all(self) -> None:
         for camera_id in list(self._slots):
@@ -740,15 +752,34 @@ class CameraPreviewController:
             return
 
         to_stop: set[str] = set()
+        failed: set[str] = set()
         tiles: list[np.ndarray] = []
         for camera_id, slot in self._slots.items():
             alive, frame = slot.latest_frame()
             if not alive:
                 to_stop.add(camera_id)
+                # Died before its first frame: typically VIDIOC_STREAMON
+                # failing with ENOSPC (USB controller out of bandwidth).
+                if isinstance(slot, _LivePreviewSlot) and not slot.got_frame:
+                    failed.add(camera_id)
                 continue
             if frame is None:
-                continue  # first frame hasn't landed yet; skip this tick
-            tile = cv2.resize(frame, _PREVIEW_TILE_SIZE)
+                # No frame yet: keep a placeholder tile so a camera that
+                # opened but never streams (e.g. USB bandwidth exhausted)
+                # stays visible instead of silently vanishing from the mosaic.
+                tile = np.zeros((_PREVIEW_TILE_SIZE[1], _PREVIEW_TILE_SIZE[0], 3), np.uint8)
+                cv2.putText(
+                    tile,
+                    "no image yet",
+                    (6, _PREVIEW_TILE_SIZE[1] // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 200, 255),  # BGR amber
+                    1,
+                    cv2.LINE_AA,
+                )
+            else:
+                tile = cv2.resize(frame, _PREVIEW_TILE_SIZE)
             if slot.is_recording_snapshot:
                 label_text, color = f"REC {slot.label}", (0, 0, 255)  # BGR red
             else:
@@ -779,7 +810,7 @@ class CameraPreviewController:
                     to_stop.update(self._slots)
 
         for camera_id in to_stop:
-            self.stop(camera_id)
+            self.stop(camera_id, failed=camera_id in failed)
 
 
 # ── Recording controller (owns live ffmpeg subprocesses) ────────────────────
@@ -982,6 +1013,10 @@ class MulticamRecorderApp:
         self.session_name_var = tk.StringVar(value="trial01")
         self.is_recording = False
         self._watchdog_job: str | None = None
+        # The stop worker thread hands its results over through this queue,
+        # drained by _poll_stop_done() on the main thread (Tk isn't
+        # thread-safe: calling even window.after() from the worker could hang).
+        self._stop_results: queue.Queue[dict[str, Path]] = queue.Queue()
 
         self._build_widgets()
         self.rescan_cameras()
@@ -1086,6 +1121,8 @@ class MulticamRecorderApp:
         order_index = self.rows.index(row)
         cv_target: int | str = row.device.id if row.device.backend == "v4l2" else order_index
 
+        if row.status_var.get() == _STATUS_NO_IMAGE:
+            row.status_var.set("idle")
         row.set_previewing(True)
         self.preview_controller.start(
             row.device.id,
@@ -1096,11 +1133,24 @@ class MulticamRecorderApp:
             video_size=row.video_size(),
         )
 
-    def _make_on_preview_stopped(self, row: _CameraRow) -> Callable[[], None]:
-        def on_stopped() -> None:
-            self.window.after(0, lambda: row.set_previewing(False))
+    def _make_on_preview_stopped(self, row: _CameraRow) -> Callable[[bool], None]:
+        def on_stopped(failed: bool) -> None:
+            if failed:
+                print(
+                    f"\n[Record Cameras] {row.device.label}: camera opened but delivered no "
+                    "image. Usually the USB controller is out of bandwidth (check "
+                    "'dmesg | tail' for 'Not enough bandwidth'): stop another camera on "
+                    "the same controller or move this one to another USB port.",
+                    flush=True,
+                )
+            self.window.after(0, lambda: self._on_preview_stopped(row, failed))
 
         return on_stopped
+
+    def _on_preview_stopped(self, row: _CameraRow, failed: bool) -> None:
+        row.set_previewing(False)
+        if failed:
+            row.status_var.set(_STATUS_NO_IMAGE)
 
     def _on_toggle(self) -> None:
         if self.is_recording:
@@ -1169,47 +1219,37 @@ class MulticamRecorderApp:
         self._watchdog_job = self.window.after(1000, self._poll_watchdog)
 
     def _stop_recording(self) -> None:
-        self.toggle_btn.config(state="disabled")
+        self.toggle_btn.config(text="Stopping...", state="disabled")
 
         def worker() -> None:
-            results = self.controller.stop()
-            self.window.after(0, lambda: self._on_stop_complete(results))
+            self._stop_results.put(self.controller.stop())
 
         threading.Thread(target=worker, daemon=True).start()
+        self.window.after(100, self._poll_stop_done)
+
+    def _poll_stop_done(self) -> None:
+        try:
+            results = self._stop_results.get_nowait()
+        except queue.Empty:
+            self.window.after(100, self._poll_stop_done)
+            return
+        self._on_stop_complete(results)
 
     def _on_stop_complete(self, results: dict[str, Path]) -> None:
         if self._watchdog_job is not None:
             self.window.after_cancel(self._watchdog_job)
             self._watchdog_job = None
-
         self.is_recording = False
-        self._set_inputs_enabled(True)
-        self.toggle_btn.config(text="Start Recording", state="normal")
 
-        for row in self.rows:
-            if row.device.id not in results:
-                continue
-            if row.status_var.get() != "disconnected":
-                row.status_var.set("stopped")
-            # ffmpeg has released the device by now (controller.stop() already
-            # waited for it to exit), so a live capture can reopen it.
-            order_index = self.rows.index(row)
-            cv_target: int | str = row.device.id if row.device.backend == "v4l2" else order_index
-            self.preview_controller.show_live(
-                row.device.id,
-                cv_target,
-                row.device.label,
-                self._make_on_preview_stopped(row),
-                framerate=row.framerate(),
-                video_size=row.video_size(),
-            )
-            row.set_previewing(True)
+        print("\n[Record Cameras] Recording stopped. Files written:", flush=True)
+        for path in results.values():
+            print(f"  {path}", flush=True)
+        if not results:
+            print("  (none)", flush=True)
 
-        summary = "\n".join(str(path) for path in results.values())
-        messagebox.showinfo(
-            "vailá",
-            f"Recording stopped.\n\nFiles written:\n{summary or '(none)'}",
-        )
+        # Close the window once the files are finalized, releasing every
+        # camera, so the next trial starts from a fresh Record Cameras window.
+        self.on_close()
 
     def _set_inputs_enabled(self, enabled: bool) -> None:
         for row in self.rows:

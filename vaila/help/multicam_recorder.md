@@ -37,6 +37,8 @@ Select **Record Cameras** in the vailá toolbox (Video and Image tools).
 2. Check the cameras to record, adjusting resolution/fps per camera if needed.
 3. Choose an output directory and enter a session/trial name.
 4. Click **Start Recording**; click the same button (now **Stop Recording**) to finish.
+   Once every file is finalized, the files written are listed in the terminal and the
+   window closes, releasing all cameras — reopen **Record Cameras** for the next trial.
 
 ### Standalone
 
@@ -57,9 +59,17 @@ uv run python vaila/multicam_recorder.py
   friendlier label.
 - No hardware frame-level synchronization between cameras — relies on
   near-simultaneous process launch, same as manual `&`/`wait` shell capture.
+- **USB bandwidth (Linux)**: some cheap UVC cameras (e.g. DV20) reserve almost
+  a whole USB 2.0 controller regardless of resolution/format, so two of them on
+  the same controller (even via a hub or different ports) cannot stream at once:
+  the second shows **no image (USB)** in its Status column and `dmesg` logs
+  `Not enough bandwidth`. Lowering resolution/fps does not help — use one such
+  camera per controller (`v4l2-ctl --list-devices` shows the controller in each
+  camera's `usb-0000:XX:XX.X` path). Stopping another camera's preview frees the
+  bandwidth, and clicking **Preview** again retries without restarting.
 
 ---
 
-📅 **Updated:** 26/09/2026
+📅 **Updated:** 10/10/2026
 🔗 **Part of vailá - Multimodal Toolbox**
 🌐 [GitHub Repository](https://github.com/vaila-multimodaltoolbox/vaila)
