@@ -19,7 +19,7 @@ Guide for **AI Assistants** (Claude Code, Antigravity, Cursor, Windsurf, etc.) w
 
 This checkout (`carlospintojunior/vaila`) is a **fork**, not the original project. Two remotes:
 
-- `origin` → `github.com/carlospintojunior/vaila` (the fork — safe to push/merge into freely, fully private to this user)
+- `origin` → `github.com/carlospintojunior/vaila` (the fork — safe to push/merge into freely; it is **public** like every GitHub fork of a public repo, so never push personal data, participant images or credentials)
 - `upstream` → `github.com/vaila-multimodaltoolbox/vaila` (the original project, maintained by `paulopreto`)
 
 **Convention:** develop each feature on its own `feat/*` branch, referencing a tracking issue filed on `upstream` (e.g. `(#624)` in commit subjects — GitHub issue numbers are global to whichever repo they're filed in, so `origin`'s own issues start over at `#1`; filing the tracking issue on `upstream` while coding on the fork is intentional and fine — an Issue is just a visible to-do, unlike a PR it asks nothing of the maintainer). When a feature branch is ready, merge it into **this fork's own `main`** (`git checkout main && git merge feat/x && git push origin main`) — never open a PR against `upstream` for this. Only open a PR against `upstream` when the user explicitly says they're ready to submit to the maintainer; never do this proactively, and if one gets opened by mistake, close it (don't delete the branch) rather than merging it.
