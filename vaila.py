@@ -7,7 +7,7 @@ Email: paulosantiago@usp.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 07 October 2024
 Update Date: 12 October 2026
-Version: 0.4.5
+Version: 0.4.8
 
 Example of usage:
 uv run --no-sync vaila.py
@@ -358,7 +358,7 @@ if platform.system() == "Darwin":  # macOS
         pass
 
 text = r"""
-    vailá - 23.Sep.2026 v0.4.5 (Python 3.12.14)
+    vailá - 07.Oct.2026 v0.4.8 (Python 3.12.14)
                                              o
                                 _,  o |\  _,/
                           |  |_/ |  | |/ / |
@@ -407,7 +407,7 @@ B5_r5_c4 - Start Block    B5_r5_c5 - vailá
 B5_r6_c1 - Sprint         B5_r6_c2 - vailá           B5_r6_c3 - tugturn
 B5_r6_c4 - Soccer Tools (coringa: Field KPs AI, Soccer-Field Calib,
             FIFA cams→DLT, FIFA Dataset Builder, VEK ElasticKick,
-            FIFA: merge manual labels, Scout, Pynalty)
+            FIFA: merge manual labels, Scout, Pynalty, FreeKiki)
 B5_r6_c5 - Deadlift
 
 B6_r7_c1 - vailá          B6_r7_c2 - vailá           B6_r7_c3 - Treadmill LC
@@ -478,7 +478,7 @@ class Vaila(tk.Tk):
 
         """
         super().__init__(className="vaila")
-        self.title("vailá - 23.Sep.2026 v0.4.5 (Python 3.12.14)")
+        self.title("vailá - 07.Oct.2026 v0.4.8 (Python 3.12.14)")
         self._main_canvas: tk.Canvas | None = None
         self._scrollable_frame: tk.Frame | None = None
         self._canvas_window_id: int | None = None
@@ -908,7 +908,7 @@ class Vaila(tk.Tk):
             - tugturn
             - Soccer Tools (coringa: Field KPs AI, Soccer-Field Calib,
               FIFA cams→DLT, FIFA Dataset Builder, VEK ElasticKick,
-              FIFA: merge manual labels, Scout, Pynalty)
+              FIFA: merge manual labels, Scout, Pynalty, FreeKiki)
             - Deadlift
             B6_r7:
             - Treadmill LC (col 3)
@@ -3242,10 +3242,20 @@ class Vaila(tk.Tk):
         """Runs the YouTube downloader module.
 
         This function runs the YouTube downloader module, which can be used to
-        download videos from YouTube. The module will prompt the user to select
-        the directory containing the video files and input the sample rate and start
-        and end indices for analysis.
+        download videos (MP4) or audio (MP3) from YouTube with per-video quality
+        selection.
         """
+        print(">> vaila/vaila_ytdown: launcher CLI")
+        try:
+            from vaila.cli_highlight import print_gui_cli_mirror
+        except ImportError:
+            from cli_highlight import print_gui_cli_mirror  # ty: ignore[unresolved-import]
+
+        print_gui_cli_mirror(
+            "vaila/vaila_ytdown",
+            ["uv", "run", "--no-sync", "vaila/vaila_ytdown.py"],
+            note="Launcher CLI (opens GUI; use --no-gui with -u URL or -f FILE for CLI):",
+        )
         from vaila import vaila_ytdown
 
         vaila_ytdown.run_ytdown()
@@ -4209,6 +4219,12 @@ class Vaila(tk.Tk):
             command=lambda: (win.destroy(), self.pynalty()),
             width=22,
         ).grid(row=4, column=1, padx=4, pady=4, sticky="we")
+        tk.Button(
+            btn_frame,
+            text="FreeKiki (49 field KPs)",
+            command=lambda: (win.destroy(), self.freekiki()),
+            width=22,
+        ).grid(row=5, column=0, padx=4, pady=4, sticky="we", columnspan=2)
 
         for col in (0, 1):
             btn_frame.grid_columnconfigure(col, weight=1)
@@ -4235,6 +4251,19 @@ class Vaila(tk.Tk):
         print("Features: elastic-band resisted kick biomechanics, ball velocity and reports")
         print("Help:     vaila/help/vek.html")
         run_vaila_module("vaila.vek", "vaila/vek.py")
+
+    def freekiki(self):
+        """FreeKiki: train/retrain and detect the 49 kiki soccer-field keypoints.
+
+        Portable workspace (dataset, runs, model registry, active model); see
+        ``vaila/help/freekiki.html``.
+        """
+        print("\n" + "=" * 60)
+        print("Launching: vaila.freekiki")
+        print("Features: YOLO-pose train/retrain + detection of 49 soccer-field keypoints")
+        print("Help:     vaila/help/freekiki.html")
+        print("=" * 60 + "\n")
+        run_vaila_module("vaila.freekiki", "vaila/freekiki.py", extra_py_flags=("-u",))
 
     def _open_fifa_workflow(self) -> None:
         webbrowser.open("file://" + str(Path(__file__).parent / "docs" / "fifa_workflow.md"))

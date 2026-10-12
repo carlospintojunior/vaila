@@ -219,10 +219,27 @@
     <div class="container">
       <h1>getpixelvideo.py - Complete Documentation</h1>
 
+      <section>
+        <h2>FreeKiki Kiki49 human review</h2>
+        <p><code>uv run --no-sync vaila/getpixelvideo.py -f VIDEO.mp4 --freekiki-workspace WS</code>
+          opens a review session. Use <code>--freekiki</code> for manual work,
+          <code>--freekiki-session SESSION.json</code> to reopen,
+          <code>--freekiki-predictions DIR</code> for a detect raw CSV (one output folder or a whole <code>processed_freekiki_batch_*</code> folder), and
+          <code>--freekiki-videos DIR</code> for sorted videos.</p>
+        <p>The 49 named slots are numbered 00–48. Ctrl+I enables marker editing.
+          Tab or Ctrl+G selects a point; Ctrl+F jumps to a zero-based frame;
+          Page Up/Down moves among drafts. F2 predicts, F3 marks human reviewed,
+          F4 saves, and F9 exports reviewed frames. Predicted markers are square;
+          the panel shows textual point status. Edits require another F3 review.</p>
+        <p>Export writes PNG/TXT pairs, <code>reviewed_frames.csv</code>, and
+          <code>human_vs_ai.csv</code>. See <a href="freekiki.html">FreeKiki help</a>
+          to preview and ingest these into train.</p>
+      </section>
+
       <div class="version-info">
-        <strong>Version:</strong> 0.4.5<br />
+        <strong>Version:</strong> 0.4.8<br />
         <strong>Date:</strong> 22 July 2025<br />
-        <strong>Updated:</strong> 23 September 2026<br />
+        <strong>Updated:</strong> 07 October 2026<br />
         <strong>Authors:</strong> Prof. Dr. Paulo R. P. Santiago, Rafael L. M.
         Monteiro<br />
         <strong>Project:</strong> <i>vailá</i> - Multimodal Toolbox<br />
@@ -314,7 +331,7 @@
               <strong>Save</strong>; discarded when you quit.
             </li>
             <li>
-              <strong>Centered letterbox viewport:</strong> Fitted media is centered in the
+              <strong>Centered letterbox viewport:</strong> Still frames that differ in size from the session canvas are fit with black bars (never stretched). Fitted media is centered in the
               window so markers can be placed in the black margins on all sides (including left/top).
               Version/date appear only in the OS window title
               (<code>vailá getpixelvideo — Update: … Version: …</code>), not overlaid on the video.
@@ -418,11 +435,11 @@
 <strong># Open a video file (GUI opens automatically)</strong><br/>
 uv run vaila/getpixelvideo.py -f video.mp4<br/><br/>
 
-<strong># Open a single PNG image</strong><br/>
-uv run vaila/getpixelvideo.py -f frame.png<br/><br/>
+<strong># Open a single still image (png, jpg, jpeg, bmp, tif, tiff, webp)</strong><br/>
+uv run vaila/getpixelvideo.py -f frame.jpg<br/><br/>
 
-<strong># Open a folder of PNG frames (sequence)</strong><br/>
-uv run vaila/getpixelvideo.py --sequence /path/to/png_folder/<br/><br/>
+<strong># Open a folder of still frames (sequence)</strong><br/>
+uv run vaila/getpixelvideo.py --sequence /path/to/image_folder/<br/><br/>
 
 <strong># Start with pre-loaded keypoint CSV</strong><br/>
 uv run vaila/getpixelvideo.py -f video.mp4 -k markers.csv<br/><br/>
@@ -466,10 +483,12 @@ uv run --with opencv-python --with pygame --with pandas --with numpy vaila/getpi
         <h3>Step-by-Step Process:</h3>
         <ol>
           <li>
-            <strong>Select media:</strong> One file picker — video, single PNG, or
-            any frame from a PNG sequence folder (auto-detected; no video-vs-PNG
-            question). Picking a PNG inside a multi-frame folder starts on that
-            frame (not the alphabetically first file).
+            <strong>Select media:</strong> One file picker — video, a single still
+            image (png, jpg, jpeg, bmp, tif, tiff, webp), or any frame from a
+            folder of those images (auto-detected). Picking a frame inside a
+            multi-image folder starts on that frame (not the alphabetically
+            first file). JPEG, TIFF, and WebP with an EXIF orientation tag open
+            in the gallery orientation.
           </li>
           <li>
             <strong>Load Existing Data:</strong> Use 'Load' button in interface
@@ -928,7 +947,7 @@ uv run --with opencv-python --with pygame --with pandas --with numpy vaila/getpi
             <ol>
               <li>Press <span class="key">Q</span> or click the toolbar <strong>QMeas</strong> button to toggle Quick Measure mode (disables Labeling/1 Line/Sequential mode while active).</li>
               <li><strong>Calibration comes first.</strong> On an uncalibrated session the prompt asks for the calibration type: <span class="key">1</span> Line (2 clicks on a segment of known length), <span class="key">2</span> Plane (4 clicks around a known rectangle), <span class="key">0</span> Skip (keep pixels). Then type the real-world unit (default <code>m</code>).</li>
-              <li>Click the calibration points on the image — a cyan banner tells you what to click next and right-click undoes the last one. After the last click, type the real <strong>length</strong> (line) or <strong>width</strong> and <strong>height</strong> (plane); <span class="key">Enter</span> reopens that prompt if you cancelled it.</li>
+              <li>Line and Plane show a persistent guide, named points, a live edge preview, and <code>LENGTH</code>/<code>WIDTH</code>/<code>HEIGHT</code> labels. After the last click, inspect the complete geometry; right-click corrects the last point and <span class="key">Enter</span> opens the real measurement fields. Cancelling or entering an invalid value keeps the drawing for another attempt.</li>
               <li>Once the calibration is accepted, click freely to measure: each left-click adds a point and the status bar shows its calibrated coordinates; right-click undoes the last point; middle-click still pans. Video FPS is detected automatically; press <span class="key">I</span> or click <span class="key">FPS … Hz</span> to override it manually for velocity and acceleration.</li>
               <li>Press <span class="key">Enter</span> to close an Area polygon or open the save/calibration submenu. Live types are <span class="key">1</span> Distance, <span class="key">2</span> Area, <span class="key">3</span> Angle, <span class="key">4</span> Velocity, and <span class="key">5</span> Acceleration.</li>
               <li>The first calibration/result save creates one <code>processed_quickmeasure_&lt;timestamp&gt;/</code> next to the video. Press <span class="key">S</span> inside the submenu to update that same directory with all points, calibration, combined + per-type result CSVs, and <code>quickmeasure_report.html</code>. Result CSVs are rectangular matrices: one measurement per row and separate <code>point_N_*</code> columns for every frame, ID, pixel coordinate, and calibrated coordinate—never space-delimited lists in one cell. Open the report in a browser for a clear column dictionary. The terminal prints the equivalent <code>uv run python -m vaila.quickmeasure --points-csv ... --measure distance</code> command.</li>
@@ -938,8 +957,8 @@ uv run --with opencv-python --with pygame --with pandas --with numpy vaila/getpi
             </ol>
             <table>
               <tr><th>Calibration mode</th><th>Clicks</th><th>Typed measures</th><th>Model</th></tr>
-              <tr><td>Line</td><td>2</td><td>length</td><td>Isotropic scale; origin at the first click, <code>+x</code> right, <code>+y</code> up. Assumes the measured plane is parallel to the sensor.</td></tr>
-              <tr><td>Plane</td><td>4 (origin, width direction, opposite corner, last corner)</td><td>width, height</td><td>8-parameter DLT2D homography — corrects perspective.</td></tr>
+              <tr><td>Line</td><td><code>1 START → 2 END</code>, then Enter</td><td>length</td><td>The segment is labeled <code>LENGTH</code>. Isotropic scale; origin at the first click, <code>+x</code> right, <code>+y</code> up.</td></tr>
+              <tr><td>Plane</td><td><code>1 ORIGIN → 2 WIDTH → 3 OPPOSITE → 4 CLOSE</code>, then Enter</td><td>width, height</td><td>Edges are labeled <code>WIDTH</code> or <code>HEIGHT</code>; 8-parameter DLT2D homography corrects perspective.</td></tr>
             </table>
             <p>
               Point-set convention (fixed, not user-configurable): Distance/Velocity use the
@@ -1802,6 +1821,41 @@ frame,p6_x,p6_y,p7_x,p7_y,p8_x,p8_y,p9_x,p9_y,p10_x,p10_y,p11_x,p11_y,p12_x,p12_
       <section id="version-history">
         <h2>11. Version History</h2>
 
+        <h3>Version 0.4.8 (07 October 2026) &mdash; Still images for measurement</h3>
+        <ul>
+          <li>Open a single still or a sequence of png, jpg, jpeg, bmp, tif, tiff, or webp (file picker, F8, <code>-f</code>, <code>-d</code>, <code>--sequence</code>). CALIB and MEASURE use the same one-frame path as PNG.</li>
+          <li>JPEG, TIFF, and WebP with an EXIF orientation tag open in the gallery orientation.</li>
+        </ul>
+
+        <h3>Version 0.4.7 (05 October 2026) &mdash; Guided Line and Plane calibration</h3>
+        <ul>
+          <li>CALIB modes <strong>1 Line</strong> and <strong>2 Plane</strong> show named points, a live next-edge preview, and persistent instructions over the video.</li>
+          <li>Completed edges identify <code>LENGTH</code>, <code>WIDTH</code>, and <code>HEIGHT</code>, matching the values requested by the dialogs.</li>
+          <li>The completed geometry remains editable until <strong>Enter</strong> confirms it; right-click undoes the last point, and cancelled or invalid measurements keep the draft.</li>
+        </ul>
+
+        <h3>Version 0.4.6 (30 September 2026) &mdash; FreeKiki correction from Load; AV1 videos open through an H.264 copy</h3>
+        <ul>
+          <li>The FreeKiki panel and point list (bottom-left) are semi-transparent, so the pitch behind stays visible.</li>
+          <li><strong>Tpl: → L = FreeKiki Load</strong>, the panel's <strong>Load run folder</strong> button, or
+            <code>--freekiki-run DIR</code>: point at a freekiki run or batch
+            folder (open it in the browser and press Enter). It opens the original video in correction mode; a batch asks which video.
+            <strong>Load</strong> on the run's CSV does the same for the video already open. The predicted 49 points
+            become editable drafts (INSERT mode).</li>
+          <li><strong>Right-click</strong> picks a point or ghost, <strong>left-click</strong> places it, and
+            <strong>Del</strong> / <strong>Del Range</strong> mark a point inside the picture that is not visible.</li>
+          <li><strong>F10</strong> accepts a ghost, <strong>F3</strong> is Frame OK and <strong>PgDn</strong> goes to the
+            next draft.</li>
+          <li><strong>F9 Save dataset</strong> writes a YOLO-pose folder you choose; only complete frames are saved. Add
+            it in FreeKiki → Train → <strong>Corrections</strong>.</li>
+          <li>OpenCV's bundled FFmpeg has no software AV1 decoder, so AV1 videos (e.g. YouTube downloads) opened
+            but every frame read failed.</li>
+          <li>On open, getpixelvideo checks that the first frame decodes. If it does not, a dialog offers an
+            H.264 copy beside the source (<code>&lt;name&gt;_h264.mp4</code>, made with the system FFmpeg).</li>
+          <li>The copy keeps every frame and timestamp, copies the audio and leaves the original unchanged.</li>
+          <li>The copy is opened and used for the marker CSVs; an existing readable copy is reused.</li>
+        </ul>
+
         <h3>Version 0.4.5 (23 September 2026) &mdash; AI Track occlusion fallback; AI-Track checkpoints survive reinstall</h3>
         <ul>
           <li><strong>Occlusion ride-through:</strong> when a passing occluder, motion blur, or a fast background change makes AI Track reject a frame's candidate match, the tracker now reports a Kalman-predicted position instead of leaving a gap &mdash; but only through a short streak (&le;5 consecutive rejects) and only while the prediction's covariance stays tight (trace &le; 400 px&sup2;). Past that, tracking freezes and falls back to the existing &ldquo;AI Track lost &mdash; click marker to re-anchor&rdquo; flow. The fallback point is never blended into the adaptive template and never counts as a confident match.</li>
@@ -2039,5 +2093,6 @@ frame,p6_x,p6_y,p7_x,p7_y,p8_x,p8_y,p9_x,p9_y,p10_x,p10_y,p11_x,p11_y,p12_x,p12_
         </ul>
       </div>
     </div>
-  </body>
+  <p>FreeKiki correction: Delete marks only the selected keypoint in the current frame as not visible (Undo supported). Save the session with F4 or close normally. Reopen the original video and Load the original detect CSV/folder, or the corrected dataset/session.json: saved corrections, hidden points, review states and the last frame/keypoint are restored automatically. F9 exports reviewed frames; F4 also preserves unfinished drafts.</p>
+</body>
 </html>

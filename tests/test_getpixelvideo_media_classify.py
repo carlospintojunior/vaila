@@ -70,6 +70,53 @@ def test_classify_media_path_video_file(tmp_path: Path) -> None:
     assert start == 0
 
 
+def test_classify_media_path_lone_jpg_is_single(tmp_path: Path) -> None:
+    jpg = tmp_path / "photo.jpg"
+    jpg.write_bytes(b"\xff\xd8\xff")
+    path, source, start = gpv.classify_media_path(str(jpg))
+    assert path == str(jpg.resolve())
+    assert source == "single_png"
+    assert start == 0
+
+
+def test_classify_media_path_jpeg_sequence_keeps_start_index(tmp_path: Path) -> None:
+    frames = tmp_path / "photos"
+    frames.mkdir()
+    first = frames / "a_frame.jpeg"
+    second = frames / "z_frame.jpeg"
+    first.write_bytes(b"\xff\xd8\xff")
+    second.write_bytes(b"\xff\xd8\xff")
+    path, source, start = gpv.classify_media_path(str(second))
+    assert path == str(frames.resolve())
+    assert source == "png_sequence"
+    assert start == 1
+
+
+def test_single_png_frame_source_reads_jpeg(tmp_path: Path) -> None:
+    import cv2
+
+    jpg = tmp_path / "measure.jpg"
+    cv2.imwrite(str(jpg), np.zeros((3, 5, 3), dtype=np.uint8))
+    src = gpv.SinglePngFrameSource(str(jpg))
+    assert src.isOpened()
+    ok, frame = src.read()
+    assert ok
+    assert frame is not None
+    assert frame.shape[:2] == (3, 5)
+
+
+def test_imread_still_applies_exif_orientation(tmp_path: Path) -> None:
+    pil_image = pytest.importorskip("PIL.Image")
+    jpg = tmp_path / "phone.jpg"
+    image = pil_image.new("RGB", (2, 4), (10, 20, 30))
+    exif = image.getexif()
+    exif[274] = 6
+    image.save(jpg, exif=exif)
+    frame = gpv._imread_still(jpg)
+    assert frame is not None
+    assert frame.shape[:2] == (2, 4)
+
+
 def test_classify_media_path_lone_png_is_single(tmp_path: Path) -> None:
     png = tmp_path / "solo.png"
     png.write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -119,6 +166,31 @@ def test_png_sequence_frame_source_honours_start_index(tmp_path: Path) -> None:
     ok, _frame = src.read()
     assert ok
     assert src.get(cv2.CAP_PROP_POS_FRAMES) == 3
+
+
+def test_sequence_metadata_uses_start_frame_dimensions(tmp_path: Path) -> None:
+    """Mixed-size folder: metadata must follow the selected still, not paths[0]."""
+    import cv2
+
+    frames = tmp_path / "mixed"
+    frames.mkdir()
+    # Alphabetical first = portrait; selected second = landscape (ralo-style bug).
+    cv2.imwrite(str(frames / "a_portrait.png"), np.zeros((192, 108, 3), dtype=np.uint8))
+    cv2.imwrite(str(frames / "b_landscape.png"), np.zeros((90, 160, 3), dtype=np.uint8))
+    meta0 = gpv.get_image_sequence_metadata(str(frames), "png_sequence", start_index=0)
+    meta1 = gpv.get_image_sequence_metadata(str(frames), "png_sequence", start_index=1)
+    assert (meta0["width"], meta0["height"]) == (108, 192)
+    assert (meta1["width"], meta1["height"]) == (160, 90)
+    assert meta1["nb_frames"] == 2
+
+
+def test_measure_overlay_toggle_wired_beside_measure_button() -> None:
+    source = Path(gpv.__file__).read_text(encoding="utf-8")
+    assert "show_measure_overlay = True" in source
+    assert "measure_overlay_toggle_rect" in source
+    assert "measure_overlay_toggle_rect.collidepoint" in source
+    assert "show_results=show_measure_overlay" in source
+    assert "letterbox_frame_to_canvas" in source
 
 
 def test_classify_media_path_directory_is_sequence(tmp_path: Path) -> None:
