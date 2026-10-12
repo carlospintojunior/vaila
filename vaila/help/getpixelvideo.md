@@ -4,17 +4,39 @@
 
 The Pixel Coordinate Tool (`getpixelvideo.py`) is a comprehensive video annotation tool that allows you to mark and save pixel coordinates in video frames. Developed by Prof. Dr. Paulo R. P. Santiago, this tool offers advanced features including zoom for precise annotations, dynamic window resizing, frame navigation, multi-format CSV support, and advanced data visualization capabilities.
 
-**Version:** 0.4.5
+**Version:** 0.4.8
 **Date:** 22 July 2025  
-**Updated:** 23 September 2026
+**Updated:** 07 October 2026
 **Authors:** Prof. Dr. Paulo R. P. Santiago, Rafael L. M. Monteiro  
 **Project:** *vailá* - Multimodal Toolbox
 
 ## Key Features
 
+### FreeKiki Kiki49 human review
+
+Open a video with `--freekiki` for manual review, or add `--freekiki-workspace WS`
+to save sessions under `WS/incoming/` and enable prediction from the active
+FreeKiki model. `--freekiki-session SESSION.json` reopens markers and review
+states. `--freekiki-predictions DIR` loads `field_kps_raw.csv` from `freekiki
+detect` (one output folder, or a whole `processed_freekiki_batch_*` folder: each
+video takes its newest matching output); `--freekiki-videos DIR` visits videos in sorted order. `--dir` still
+means a still-image sequence (png, jpg, jpeg, bmp, tif, tiff, webp).
+
+The **FreeKiki Kiki49** template has exactly 49 slots (`00` through `48`),
+named by `soccerfield_kiki.csv`. Turn on **INSERT** (`Ctrl+I`) to click or drag
+points. Predicted points have square outlines; the context panel shows the
+selected point's name and textual status. Use `Tab` and `Ctrl+G` to choose a
+point, `Ctrl+F` to jump to a zero-based frame such as `17608`, and Page Up/Down
+to move among draft frames. F2 **Predict Kiki49**, F3 **Mark Reviewed**, F4
+**Save Session**, and F9 **Export Reviewed** are exclusive to this mode. A
+correction to a reviewed frame makes it a draft until F3 confirms all 49
+visibilities again. Escape saves the session. The export contains only reviewed
+frames in `images/`, `labels/`, `reviewed_frames.csv`, and `human_vs_ai.csv`;
+it does not create train/val/test splits. See the FreeKiki help page for ingest.
+
 - **VISUAL / INSERT editor modes (v0.4.2):** Opens in **VISUAL** (safe browse — no marker edits). **Ctrl+I** or the **VISUAL/INSERT** toolbar button switches to **INSERT** for normal marking. **Ctrl+Z** undoes discrete marker edits (INSERT). **Restore** reverts to session open or the last successful **Save**; discarded when you quit.
 
-- **Centered letterbox viewport:** When the fitted video is smaller than the window (common for portrait clips), the frame is centered so you can mark points in the black margins on *all* sides — left and top included, not only right/bottom. Version/date appear only in the OS window title (`vailá getpixelvideo — Update: … Version: …`), not overlaid on the video.
+- **Centered letterbox viewport:** When the fitted video is smaller than the window (common for portrait clips), the frame is centered so you can mark points in the black margins on *all* sides — left and top included, not only right/bottom. Still frames that differ in size from the session canvas are fit with black bars (never stretched). Version/date appear only in the OS window title (`vailá getpixelvideo — Update: … Version: …`), not overlaid on the video.
 
 - **AI Tracker (NCC + Spatial Motion Prior + Online Discriminator & multi-backbone deep features) & RTS Smoother (`AI Track` button / hotkey `T`):** Normalized Cross-Correlation with sub-pixel parabolic peak refinement, 2D Gaussian spatial motion prior (with velocity prediction) to prevent distractor jumps, adaptive running template EMA blending, online appearance model that **keeps learning across manual corrections** (no wipe on re-anchor), low-confidence rejection, and optional Deep Visual Feature embeddings (PyTorch ResNet50, default, or opt-in ResNet152 / MobileNetV3-Small / EfficientNet-B0 / CUDA). Backbone weights live only under `vaila/models/ai_tracker/` (`resnet50_imagenet.pth`, `resnet152_imagenet.pth`, `mobilenet_v3_small_imagenet.pth`, `efficientnet_b0_imagenet.pth`, or a custom path). If missing, the GUI prompts to **browse** an existing `.pth`/`.pt` or **download** a clean official ImageNet checkpoint into that folder (Torch hub cache is never the permanent home; a one-time migration copies hub files into `ai_tracker/` when found). When enabled, the frozen *primary* backbone's embedding is also concatenated into the online discriminator's feature vector, so it participates in every per-click retrain without ever being backpropagated through. An optional, **off-by-default cascade fallback** (`fallback_variant` in the TOML profile, e.g. `efficientnet_b0`) re-scores a low-confidence frame with a second backbone and adopts it only if it scores higher — never affects the discriminator's feature width, only per-frame verification. Features:
   - **Accessible button:** Short label `AI Track` illuminates in **bright green** immediately when enabled (armed/tracking) and red when off. Optional **Deep** checkbox sits to the right of `AI Track` (deep features are an option of the tracker, not a separate mode).
@@ -49,7 +71,7 @@ The Pixel Coordinate Tool (`getpixelvideo.py`) is a comprehensive video annotati
   - **MediaPipe / YOLO:** stick-figure pose guide
   - **Other Tpl presets:** name-list reference (scrolls with selected keypoint) + skeleton lines from the JSON when markers are present
   Marking behaviour is the same as with the guide off (TAB, **Ctrl+G** / Go KP, left/right click).
-- **Quick Measure (`Q` / toolbar `QMeas`):** calibration first (Line / Plane / REF3D mode1–3 with plane drop + CSV or guided clicks), then free measuring; Enter classifies Distance/Area/Angle/Velocity/Acceleration and `S` saves the calibrated points/results CSVs (see `quickmeasure` help).
+- **Quick Measure (`Q` / toolbar `MEASURE`):** calibration first (Line / Plane / REF3D mode1–3 with plane drop + CSV or guided clicks), then free measuring; Enter classifies Distance/Area/Angle/Velocity/Acceleration and `S` saves the calibrated points/results CSVs (see `quickmeasure` help). A small checkbox beside **MEASURE** toggles on-image value badges (`#N · type · value unit`).
 - **Zoom & Navigation:** Full zoom capabilities with frame-by-frame navigation
 - **Persistence Mode:** View marker trails across multiple frames
 - **Auto-detection:** Automatically detect CSV format or manual selection
@@ -78,7 +100,7 @@ Optional one-off run without syncing the whole repo: `uv run --with opencv-pytho
 ## Getting Started
 
 1. **Run the script:** `uv run vaila/getpixelvideo.py` (or `python vaila/getpixelvideo.py` if your environment is already set up)
-2. **Select media:** One file picker — choose a video, a single PNG, or any frame from a PNG sequence folder (type is auto-detected; no video-vs-PNG question). When you pick a PNG inside a multi-frame folder, that frame is the starting position (not the alphabetically first file).
+2. **Select media:** One file picker — choose a video, a single still image (png, jpg, jpeg, bmp, tif, tiff, webp), or any frame from a folder of those images (type is auto-detected). When you pick a frame inside a multi-image folder, that frame is the starting position (not the alphabetically first file). JPEG, TIFF, and WebP with an EXIF orientation tag open in the gallery orientation.
 3. **Load existing data:** Use 'Load' button in interface (optional)
 4. **Select format:** If loading data, choose CSV format:
    - **Auto-detect (recommended):** Automatically detects the format
@@ -94,8 +116,8 @@ Optional one-off run without syncing the whole repo: `uv run --with opencv-pytho
 ```bash
 uv run vaila/getpixelvideo.py --help
 uv run vaila/getpixelvideo.py -f VIDEO.mp4
-uv run vaila/getpixelvideo.py -f /path/to/png_folder      # or single .png
-uv run vaila/getpixelvideo.py -d /path/to/png_folder      # same as --sequence; subfolder with PNGs is auto-picked
+uv run vaila/getpixelvideo.py -f /path/to/image_folder    # or a single .png / .jpg / .jpeg
+uv run vaila/getpixelvideo.py -d /path/to/image_folder    # same as --sequence; subfolder with stills is auto-picked
 uv run vaila/getpixelvideo.py --sequence /path/to/frames
 uv run vaila/getpixelvideo.py -f VIDEO.mp4 --fifa-dataset /path/to/unified
 uv run vaila/getpixelvideo.py -f VIDEO.mp4 --dataset /path/to/vaila_dataset
@@ -360,7 +382,7 @@ Semi-automatic point tracking powered by Normalized Cross-Correlation (NCC), sub
 Kinovea-style quick on-image measurements, implemented in the companion module `vaila/quickmeasure.py` (see [quickmeasure.md](quickmeasure.md)) and wired into `getpixelvideo.py` as a thin integration layer.
 
 1. Press **Q** or click toolbar **QMeas** to toggle Quick Measure mode (disables Labeling/1 Line/Sequential mode while active).
-2. **Calibration comes first.** Choose **1** Line, **2** Plane, **3** REF3D (`.ref3d` mode1/2/3 + drop X/Y/Z + pixel CSV or guided clicks with scheme overlay), or **0** Skip (pixels). Then type the unit (default `m`).
+2. **Calibration comes first.** Choose **1** Line, **2** Plane, **3** REF3D (`.ref3d` mode1/2/3 + drop X/Y/Z + pixel CSV or guided clicks with scheme overlay), or **0** Skip (pixels). Then type the unit (default `m`). Line and Plane show a persistent guide, named points, a live edge preview, and `LENGTH`/`WIDTH`/`HEIGHT` labels. After the last point, review the complete geometry and press **Enter** to type the real measures; right-click still undoes the last point.
 3. **Live measure modes (digit keys on the video):** **1** distance (2 clicks), **2** area (≥3 clicks + Enter), **3** angle (3 clicks), **4** velocity (2 frames, needs FPS), **5** acceleration (3 frames, needs FPS), **6–0** reserved. Each completed set draws its value on the image.
 4. FPS is detected automatically. Override it when needed with **I** or the **FPS … Hz** toolbar button; enter a positive decimal or fraction such as `60000/1001`. The manual value is used by velocity/acceleration. Right-click undoes the last draft point.
 5. **Enter** closes an area polygon, or opens the submenu (**S** save, **C**/**R** calibration, **X** clear).
@@ -370,8 +392,8 @@ Kinovea-style quick on-image measurements, implemented in the companion module `
 
 | Mode | Input | Notes |
 |------|--------|-------|
-| Line | 2 clicks + length | Isotropic scale; origin at first click. |
-| Plane | 4 clicks + width/height | DLT2D homography. |
+| Line | `1 START → 2 END`, Enter, then length | Segment is labeled `LENGTH`; isotropic scale; origin at first click. |
+| Plane | `1 ORIGIN → 2 WIDTH → 3 OPPOSITE → 4 CLOSE`, Enter, then width/height | Edges are labeled `WIDTH` or `HEIGHT`; DLT2D homography. |
 | REF3D | `.ref3d` + drop axis + CSV or guide | Planar DLT2D via `rec2d`; duplicates after axis drop are deduped. |
 
 **Point-set convention** (fixed, not user-configurable, so results are reproducible from clicks alone):
@@ -697,6 +719,54 @@ Built-in backup system for data safety:
 
 ## Version History
 
+### Version 0.4.8 (07 October 2026) — Still images for measurement
+
+- Open a single still or a sequence of png, jpg, jpeg, bmp, tif, tiff, or webp
+  (file picker, F8, `-f`, `-d`, `--sequence`). CALIB and MEASURE use the same
+  one-frame path as PNG.
+- JPEG, TIFF, and WebP with an EXIF orientation tag open in the gallery orientation.
+
+### Version 0.4.7 (05 October 2026) — Guided Line and Plane calibration
+
+- CALIB modes **1 Line** and **2 Plane** now show named points, a live next-edge
+  preview, and persistent instructions directly over the video.
+- Completed calibration edges identify `LENGTH`, `WIDTH`, and `HEIGHT`, so the
+  values requested by the dialogs map visibly to the drawing.
+- The completed geometry remains editable until **Enter** confirms it; right-click
+  undoes the last point, and cancelled or invalid measurements keep the draft.
+
+### Version 0.4.6 (30 September 2026) — FreeKiki correction from Load; AV1 videos open through an H.264 copy
+
+**FreeKiki correction from Load**
+
+- **Tpl: → L = FreeKiki Load**, the **Load run folder** button of the FreeKiki panel, or `--freekiki-run DIR`,
+  opens a freekiki detect run.
+- The FreeKiki panel and point list (bottom-left) are semi-transparent, so the pitch behind stays visible.
+  - Point at the run or batch folder only: open it in the browser and press **Enter** (or type its path). A batch
+    asks which video.
+  - It opens the original video (found from the run's README, or next to the run if moved) in correction mode.
+- **Load** on the run's `field_kps_getpixelvideo.csv` does the same for the video already open.
+- The predicted 49 points appear as editable drafts, in INSERT mode.
+- **Right-click** picks a point or ghost; **left-click** places it.
+- **Del** / **Del Range** mark a point that is inside the picture but not visible.
+- **Compact review toolbar:** 5 compact buttons in the bottom panel: **Load run**, **Frame OK (F3)**, **Ghost (F10)**, **Next (PgDn)**, and **Save (F9)**.
+- **F9 Save (or panel Save button):** prompts to choose **Full** (1) or **Lite** (2):
+  - **Full mode (1):** writes all frames (human corrections + uncorrected AI predictions) to train on full footage (default folder `freekiki_full_<video>`).
+  - **Lite mode (2):** writes only human-completed frames (default folder `freekiki_corrections_<video>`).
+- Add that folder in FreeKiki → Train → **Corrections** (`--add-dataset`).
+
+**AV1 videos**
+
+- OpenCV's bundled FFmpeg has no software AV1 decoder, so AV1 videos (e.g.
+  YouTube downloads) opened but every frame read failed
+  (`[av1] Your platform doesn't support hardware accelerated AV1 decoding`).
+- On open, getpixelvideo checks that the first frame decodes. If it does
+  not, a dialog offers an H.264 copy beside the source
+  (`<name>_h264.mp4`, made with the system FFmpeg). It keeps every frame and
+  timestamp, copies the audio and leaves the original unchanged.
+- The copy is opened and used for the marker CSVs. An existing readable copy
+  is reused without asking.
+
 ### Version 0.4.5 (23 September 2026) — AI Track occlusion fallback; AI-Track checkpoints survive reinstall
 
 - **Occlusion ride-through:** when a passing occluder, motion blur, or a fast background change makes AI Track reject a frame's candidate match, the tracker now reports a Kalman-predicted position instead of leaving a gap — but only through a short streak (≤5 consecutive rejects) and only while the prediction's covariance stays tight (trace ≤ 400 px²). Past that, tracking freezes and falls back to the existing "AI Track lost — click marker to re-anchor" flow. The fallback point is never blended into the adaptive template and never counts as a confident match.
@@ -879,3 +949,6 @@ Built-in backup system for data safety:
 
 - Version 0.0.7: Basic functionality with zoom and marker modes
 - Version 0.0.6: Initial implementation with video navigation
+
+
+FreeKiki correction: Delete marks only the selected keypoint in the current frame as not visible (Undo supported). Save the session with F4 or close normally. Reopen the original video and Load the original detect CSV/folder, or the corrected dataset/session.json: saved corrections, hidden points, review states and the last frame/keypoint are restored automatically. F9 exports reviewed frames; F4 also preserves unfinished drafts.

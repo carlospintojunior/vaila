@@ -6,13 +6,14 @@ Pixel Coordinate Tool - getpixelvideo.py
 Authors: Prof. Dr. Paulo R. P. Santiago and Rafael L. M. Monteiro
 https://github.com/vaila-multimodaltoolbox/vaila
 Date: 22 July 2025
-Update: 23 September 2026
-Version: 0.4.5
+Update: 07 October 2026
+Version: 0.4.8
 Python Version: 3.12.14
 
 Description:
 ------------
-Mark and save pixel coordinates on video frames or PNG sequences, with zoom,
+Mark and save pixel coordinates on video frames or still-image sequences
+(PNG, JPEG, BMP, TIFF, WebP), with zoom,
 pan, frame navigation, and multiple marker modes. CSV coordinates are saved as
 integers where applicable. Marker backups go to ``.vaila_markers_history/`` (latest
 100 per video).
@@ -36,6 +37,14 @@ Template Marker Mode (toolbar Template / ``Tpl:`` button):
   - **Free** — variable-length markers
   - **Soccer-Kiki** — pitch guide (``soccerfield_kiki.csv`` / dataset keypoints;
     internal mode id ``fifa`` kept for TOML/CLI compatibility)
+  - **FreeKiki** — kiki49 (49 field KPs) correction session. **Load** a freekiki
+    detect output (its CSV or folder) to edit its predictions. Right-click picks a
+    point, left-click places it, Del / Del Range = "not visible", F10 accept ghost,
+    F3 frame OK, X discard a bad frame (hidden from navigation; Shift+X shows them), PgDn next draft, F9 save dataset folder (F2 predict, F4 save
+    session). **Tpl: → L = FreeKiki Load** / ``--freekiki-run DIR``: point at a
+    freekiki detect run or batch folder; the original video opens in correction mode. Ghosts: cyan circle = AI point below kp_conf,
+    pink cross = field-homography projection. Only complete frames (every visible
+    point labelled or hidden) can be marked reviewed / exported.
   - Pose / hand presets from ``vaila/skeletons/`` via dialog (MediaPipe 33,
     YOLO 17, OpenPose 25, Halpe 26, FIFA Body-15, SAM3+DINOv3 70, Sapiens2 308,
     Hand 21 / Hands 42 / Holistic 75, COCO WholeBody 133)
@@ -59,6 +68,9 @@ Quick Measure / CALIB + MEASURE (see ``vaila/quickmeasure.py``):
   **CALIB** first (optional): Line (2 clicks + length), Plane (4 clicks +
   width/height → DLT2D), REF3D (``.ref3d`` + drop axis → planar ``rec2d``),
   load file, or skip. Scope: **default** (whole video) or **this frame**.
+  Line/Plane clicks show named points, live edge previews, and dimension labels;
+  after the last click, review the completed geometry and press ``Enter`` to
+  type the real measurement(s), or right-click to correct a point.
   Future DLT3D (11 params) is reserved. **MEASURE** then uses digit keys:
   ``1`` distance, ``2`` area, ``3`` angle, ``4`` velocity, ``5`` acceleration
   (``6``–``0`` reserved); each completed set is drawn on the image with its
@@ -82,7 +94,8 @@ Pose / ML:
 How to use:
 ------------
 1. Run ``uv run vaila/getpixelvideo.py`` (no args opens one file picker), or pass CLI paths.
-   Video / single PNG / PNG sequence are auto-detected (pick any frame in a PNG folder).
+   Video / single still image / image sequence are auto-detected (pick any frame in a
+   folder of PNG, JPEG, BMP, TIFF, or WebP).
 2. Optional: Load existing markers (Load button).
 3. Mark, TAB between slots, **Ctrl+G** to jump to a keypoint number, Save.
 
@@ -105,15 +118,16 @@ Load Track CSV (smart loader, button next to the Load Track CSV button):
     sam_tracks.csv --video VIDEO.mp4 --class-name person``.
 
 CLI (non-exhaustive; ``-h`` / ``--help`` prints a short summary):
-  ``-f, --file`` — video, single ``.png``, or directory of PNG frames (subfolder
-  with PNGs is resolved). ``-d, --dir`` / ``--sequence DIR`` — PNG sequence folder.
+  ``-f, --file`` — video, single still image (png/jpg/jpeg/bmp/tif/tiff/webp),
+  or a directory of those frames (a subfolder with images is resolved).
+  ``-d, --dir`` / ``--sequence DIR`` — still-image sequence folder.
   ``--dataset DIR``, ``--fifa``, ``--fifa-dataset [DIR]``.
 
 Examples::
 
     uv run vaila/getpixelvideo.py --help
     uv run vaila/getpixelvideo.py -f VIDEO.mp4
-    uv run vaila/getpixelvideo.py -d /path/to/png_frames
+    uv run vaila/getpixelvideo.py -d /path/to/image_frames
     uv run vaila/getpixelvideo.py -f VIDEO.mp4 --fifa-dataset /path/to/unified
 
 Key bindings (see in-app **H** help for full list):
@@ -161,6 +175,7 @@ Visit the project repository: https://github.com/vaila-multimodaltoolbox/vaila
 """
 
 import bisect
+import contextlib
 import copy
 import io
 import json
@@ -168,6 +183,7 @@ import math
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -259,8 +275,19 @@ except ImportError:
 VAILA_MARK = "vailá"
 
 # Visible build stamp (keep aligned with the module docstring header).
-GETPIXELVIDEO_VERSION = "0.4.5"
-GETPIXELVIDEO_UPDATE_DATE = "23 September 2026"
+GETPIXELVIDEO_VERSION = "0.4.8"
+# FreeKiki review panel / point list background opacity (0 = invisible, 255 = solid).
+FREEKIKI_PANEL_ALPHA = 140
+
+
+def blit_translucent(surface, rect, rgb, alpha: int) -> None:
+    """Fill ``rect`` on ``surface`` with a semi-transparent colour (image stays visible)."""
+    box = pygame.Surface(rect.size, pygame.SRCALPHA)
+    box.fill((*rgb, alpha))
+    surface.blit(box, rect.topleft)
+
+
+GETPIXELVIDEO_UPDATE_DATE = "07 October 2026"
 GETPIXELVIDEO_BUILD_LINE = f"Update: {GETPIXELVIDEO_UPDATE_DATE} Version: {GETPIXELVIDEO_VERSION}"
 GETPIXELVIDEO_WINDOW_TITLE = f"{VAILA_MARK} getpixelvideo — {GETPIXELVIDEO_BUILD_LINE}"
 
@@ -390,6 +417,33 @@ def compute_letterbox_pads(
     return pad_x, pad_y
 
 
+def letterbox_frame_to_canvas(frame: np.ndarray, canvas_w: int, canvas_h: int) -> np.ndarray:
+    """Fit ``frame`` into a ``canvas_w`` × ``canvas_h`` BGR canvas without stretching.
+
+    Uniform scale (never anisotropic). Letterbox / pillarbox with black bars when
+    the frame aspect differs from the canvas. Same-size frames are returned as a
+    copy so callers can mutate safely.
+    """
+    canvas_w = max(1, int(canvas_w))
+    canvas_h = max(1, int(canvas_h))
+    fh, fw = frame.shape[:2]
+    if fw == canvas_w and fh == canvas_h:
+        return frame.copy()
+    scale = min(canvas_w / max(1, fw), canvas_h / max(1, fh))
+    new_w = max(1, int(round(fw * scale)))
+    new_h = max(1, int(round(fh * scale)))
+    # Clamp rounding so the fitted image never exceeds the canvas.
+    new_w = min(new_w, canvas_w)
+    new_h = min(new_h, canvas_h)
+    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    resized = cv2.resize(frame, (new_w, new_h), interpolation=interp)
+    canvas = np.zeros((canvas_h, canvas_w, 3), dtype=frame.dtype)
+    pad_x = (canvas_w - new_w) // 2
+    pad_y = (canvas_h - new_h) // 2
+    canvas[pad_y : pad_y + new_h, pad_x : pad_x + new_w] = resized
+    return canvas
+
+
 def marked_count_hud_pos(
     window_width: int,
     text_width: int,
@@ -467,14 +521,86 @@ _PYGAME_KP_DIGIT: dict[int, str] = {
 
 
 # ---------------------------------------------------------------------------
-# Frame source abstraction (video, single PNG, PNG sequence)
+# Frame source abstraction (video, single still image, image sequence)
 # ---------------------------------------------------------------------------
+
+STILL_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"})
+_EXIF_ORIENTATION_TAG = 274
+_EXIF_TRANSPOSE_SUFFIXES = frozenset({".jpg", ".jpeg", ".tif", ".tiff", ".webp"})
+
+
+def _is_still_image(name: str) -> bool:
+    """True when ``name`` is a still OpenCV can open (png/jpg/jpeg/bmp/tif/tiff/webp)."""
+    return Path(name).suffix.lower() in STILL_IMAGE_EXTENSIONS
+
+
+def _still_image_dialog_globs() -> str:
+    """Space-separated ``*.ext`` patterns, both cases, for file dialogs."""
+    parts: list[str] = []
+    for ext in sorted(STILL_IMAGE_EXTENSIONS):
+        parts.append(f"*{ext}")
+        parts.append(f"*{ext.upper()}")
+    return " ".join(parts)
+
+
+def _natural_sort_key(s):
+    """Sort key for natural ordering (e.g. 000000001.png, 000000010.jpg)."""
+    parts = re.split(r"(\d+)", str(s))
+    return [int(p) if p.isdigit() else p.lower() for p in parts if p]
+
+
+def _list_still_images(directory: str | Path) -> list[Path]:
+    """Natural-sorted still images directly inside ``directory``."""
+    directory = Path(directory)
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    return sorted(
+        (directory / name for name in names if _is_still_image(name)),
+        key=_natural_sort_key,
+    )
+
+
+def _imread_exif_oriented(path: Path):
+    """BGR array when EXIF orientation must be applied, else None."""
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as im:
+            orientation = im.getexif().get(_EXIF_ORIENTATION_TAG)
+            if not orientation or int(orientation) == 1:
+                return None
+            rgb = ImageOps.exif_transpose(im)
+            if rgb is None:
+                return None
+            rgb = rgb.convert("RGB")
+            return cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _imread_still(path: str | Path):
+    """Read a still image as BGR.
+
+    PNG and images without a rotated EXIF orientation use ``cv2.imread``.
+    JPEG, TIFF, and WebP with Orientation other than 1 are transposed with
+    Pillow so phone photos match the gallery before measurement.
+    """
+    path = Path(path)
+    if path.suffix.lower() in _EXIF_TRANSPOSE_SUFFIXES:
+        oriented = _imread_exif_oriented(path)
+        if oriented is not None:
+            return oriented
+    return cv2.imread(str(path))
 
 
 class FrameSource:
     """Abstract interface compatible with cv2.VideoCapture for frame access.
 
-    Implementations: video (VideoCapture), single PNG, PNG sequence directory.
+    Implementations: video (VideoCapture), single still image, image sequence directory.
     """
 
     def isOpened(self):  # noqa: N802 (match cv2.VideoCapture API)
@@ -521,11 +647,11 @@ class VideoFrameSource(FrameSource):
 
 
 class SinglePngFrameSource(FrameSource):
-    """Single PNG file as one-frame source."""
+    """Single still image (png/jpg/jpeg/bmp/tif/tiff/webp) as one-frame source."""
 
     def __init__(self, image_path):
         self._path = Path(image_path)
-        self._frame = cv2.imread(str(self._path))
+        self._frame = _imread_still(self._path)
         self._current = 0
         self._opened = self._frame is not None
 
@@ -558,21 +684,12 @@ class SinglePngFrameSource(FrameSource):
         self._opened = False
 
 
-def _natural_sort_key(s):
-    """Sort key for natural ordering (e.g. 000000001.png, 000000010.png)."""
-    parts = re.split(r"(\d+)", str(s))
-    return [int(p) if p.isdigit() else p.lower() for p in parts if p]
-
-
 class PngSequenceFrameSource(FrameSource):
-    """Directory of PNG files as a frame sequence."""
+    """Directory of still images (png/jpg/jpeg/bmp/tif/tiff/webp) as a frame sequence."""
 
     def __init__(self, directory, start_index: int = 0):
         self._dir = Path(directory)
-        paths = sorted(
-            [self._dir / f for f in os.listdir(self._dir) if f.lower().endswith(".png")],
-            key=_natural_sort_key,
-        )
+        paths = _list_still_images(self._dir)
         self._paths = [str(p) for p in paths]
         n = len(self._paths)
         if n:
@@ -584,7 +701,7 @@ class PngSequenceFrameSource(FrameSource):
         self._height = 0
         if self._paths:
             # Probe dimensions from the start frame (not always frame 0).
-            probe = cv2.imread(self._paths[self._current])
+            probe = _imread_still(self._paths[self._current])
             if probe is not None:
                 self._height, self._width = probe.shape[:2]
 
@@ -594,7 +711,7 @@ class PngSequenceFrameSource(FrameSource):
     def read(self):
         if not self._opened or self._current >= len(self._paths):
             return False, None
-        frame = cv2.imread(self._paths[self._current])
+        frame = _imread_still(self._paths[self._current])
         if frame is None:
             return False, None
         self._current += 1  # Advance so next read() returns next frame (like VideoCapture)
@@ -616,6 +733,13 @@ class PngSequenceFrameSource(FrameSource):
             return self._height
         return 0
 
+    def path_at(self, index: int) -> str | None:
+        """Return the still-image path for frame ``index`` (0-based)."""
+        if not self._paths:
+            return None
+        i = max(0, min(int(index), len(self._paths) - 1))
+        return self._paths[i]
+
     def release(self):
         self._paths = []
         self._opened = False
@@ -625,7 +749,8 @@ def create_frame_source(path, source_type, start_index: int = 0):
     """Create a FrameSource from path and source_type.
 
     source_type: "video" | "single_png" | "png_sequence"
-    start_index: initial frame for PNG sequences (ignored otherwise).
+    start_index: initial frame for still-image sequences (ignored otherwise).
+    ``single_png`` / ``png_sequence`` also cover jpg, jpeg, bmp, tif, tiff, and webp.
     """
     if source_type == "video":
         return VideoFrameSource(path)
@@ -637,13 +762,10 @@ def create_frame_source(path, source_type, start_index: int = 0):
 
 
 def _png_sequence_index_for_file(directory: str | Path, selected_file: str | Path) -> int:
-    """Natural-sorted index of ``selected_file`` within PNG frames in ``directory``."""
+    """Natural-sorted index of ``selected_file`` within still frames in ``directory``."""
     directory = Path(directory)
     selected = Path(selected_file)
-    paths = sorted(
-        [directory / f for f in os.listdir(directory) if f.lower().endswith(".png")],
-        key=_natural_sort_key,
-    )
+    paths = _list_still_images(directory)
     selected_name = selected.name
     for i, p in enumerate(paths):
         if p.name == selected_name:
@@ -663,13 +785,15 @@ def _png_sequence_index_for_file(directory: str | Path, selected_file: str | Pat
 
 
 def get_image_sequence_metadata(path, source_type):
-    """Get metadata dict for single PNG or PNG sequence (same shape as get_precise_video_metadata).
+    """Get metadata for a single still or an image sequence (same shape as video metadata).
 
     source_type: "single_png" | "png_sequence"
+    ``codec`` stays ``"png"`` for every still so image-source paths (measure, no audio)
+    stay on for JPEG and the other still extensions.
     """
     path = Path(path)
     if source_type == "single_png":
-        img = cv2.imread(str(path))
+        img = _imread_still(path)
         if img is None:
             return {"fps": 1.0, "width": 0, "height": 0, "nb_frames": 0}
         h, w = img.shape[:2]
@@ -681,11 +805,8 @@ def get_image_sequence_metadata(path, source_type):
             "duration": None,
             "codec": "png",
         }
-    # png_sequence: directory
-    paths = sorted(
-        [path / f for f in os.listdir(path) if f.lower().endswith(".png")],
-        key=_natural_sort_key,
-    )
+    # png_sequence: directory of still images
+    paths = _list_still_images(path)
     nb_frames = len(paths)
     width = height = 0
     fps = 30.0
@@ -707,7 +828,7 @@ def get_image_sequence_metadata(path, source_type):
         except (ValueError, OSError):
             pass
     if (width == 0 or height == 0) and paths:
-        first = cv2.imread(str(paths[0]))
+        first = _imread_still(paths[0])
         if first is not None:
             height, width = first.shape[:2]
     return {
@@ -1969,7 +2090,6 @@ def pygame_file_dialog(
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 x, y = event.pos
-
                 if event.button == 1:  # Left click
                     # Check path input field
                     if input_rect.collidepoint(x, y):
@@ -2140,6 +2260,7 @@ def play_video_with_controls(
     metadata=None,
     initial_fifa_mode=False,
     initial_frame: int = 0,
+    freekiki_options: dict | None = None,
 ):
     if frame_source is not None:
         cap = frame_source
@@ -2181,6 +2302,52 @@ def play_video_with_controls(
         coordinates = {i: [] for i in range(total_frames)}
 
     deleted_positions = {i: set() for i in range(total_frames)}
+
+    freekiki_session: Any = None
+    freekiki_api: Any = None
+    if freekiki_options is not None:
+        if is_image_source:
+            raise ValueError("FreeKiki review requires a video")
+        try:
+            from . import freekiki as freekiki_api
+        except ImportError:
+            import freekiki as freekiki_api  # ty: ignore[unresolved-import]
+        session_file = freekiki_options.get("session") or freekiki_api.find_review_session(
+            video_path, freekiki_options.get("predictions"), freekiki_options.get("workspace")
+        )
+        if session_file:
+            freekiki_session = freekiki_api.load_review_session(
+                session_file, video_path, original_width, original_height, fps
+            )
+        else:
+            if freekiki_options.get("workspace"):
+                freekiki_api.load_settings(Path(freekiki_options["workspace"]))
+            freekiki_session = freekiki_api.new_review_session(
+                video_path,
+                original_width,
+                original_height,
+                fps,
+                workspace=freekiki_options.get("workspace"),
+            )
+        for frame_str, review in freekiki_session["frames"].items():
+            fi = int(frame_str)
+            if 0 <= fi < total_frames:
+                coordinates[fi] = [
+                    tuple(p) if p is not None else (None, None) for p in review["points"]
+                ]
+                deleted_positions[fi] = set(review.get("hidden", []))
+
+    freekiki_export_mode: str = "full"
+    if freekiki_options is not None and freekiki_options.get("export_mode"):
+        _m = str(freekiki_options["export_mode"]).strip().lower()
+        freekiki_export_mode = (
+            "only_correct" if _m in ("lite", "only", "only_correct", "correct") else "full"
+        )
+    elif freekiki_session is not None and freekiki_session.get("export_mode"):
+        _m = str(freekiki_session["export_mode"]).strip().lower()
+        freekiki_export_mode = (
+            "only_correct" if _m in ("lite", "only", "only_correct", "correct") else "full"
+        )
 
     assert coordinates is not None
     assert deleted_positions is not None
@@ -2270,6 +2437,11 @@ def play_video_with_controls(
 
     # For regular mode, we'll track deleted positions
     deleted_positions = {i: set() for i in range(total_frames)}
+    if freekiki_session is not None:
+        for frame_str, review in freekiki_session["frames"].items():
+            fi = int(frame_str)
+            if 0 <= fi < total_frames:
+                deleted_positions[fi] = set(review.get("hidden", []))
 
     # VISUAL (safe browse, default) vs INSERT (edit markers). Ctrl+I / EditMode button.
     # Helpers + initial restore snapshot are wired after bboxes / HUD banners exist.
@@ -2331,6 +2503,7 @@ def play_video_with_controls(
 
     # When opening with a dataset (e.g. after F8 switch or --dataset), auto-load project for this video
     switch_to_video = None  # If set, exit and run_getpixelvideo will reopen with this path
+    switch_freekiki_run = None  # FreeKiki Load: detect run to open in correction mode after switch
     auto_load_project_done = False
 
     # Feature: Click & Pass
@@ -2341,6 +2514,8 @@ def play_video_with_controls(
     # Session persists across toggling so results stay visible.
     measure_mode = False
     calib_mode = False
+    # Checkbox beside MEASURE: draw completed measurement geometry + value badges.
+    show_measure_overlay = True
     quickmeasure_session: quickmeasure.QuickMeasureSession | None = None
     # While True, left-clicks feed the active CalibrationDraft / Ref3d draft.
     quick_measure_calibrating = False
@@ -2380,6 +2555,10 @@ def play_video_with_controls(
     # - "fifa": Soccer-Kiki pitch guide (visual; UI label Soccer-Kiki)
     # - other ids: pose/hand presets from vaila/skeletons/ (see skeleton_catalog)
     template_mode = "fifa" if pitch_guide_fifa_mode else "free"
+    if freekiki_session is not None:
+        template_mode = "freekiki"
+        pitch_guide_fifa_mode = True
+        fifa_fixed_keypoints = 49
     template_keypoint_names: list[str] | None = None
     template_connections: frozenset[tuple[int, int]] | None = None
 
@@ -2631,6 +2810,22 @@ def play_video_with_controls(
             quickmeasure_session.fps = fps
         return quickmeasure_session
 
+    def _media_frame_file(frame_idx: int | None = None) -> str | None:
+        """Concrete PNG/JPG/video path used for save filenames (not the folder)."""
+        idx = int(frame_count if frame_idx is None else frame_idx)
+        if isinstance(cap, PngSequenceFrameSource):
+            return cap.path_at(idx)
+        if isinstance(cap, SinglePngFrameSource):
+            return str(cap._path)
+        if video_path and os.path.isfile(video_path):
+            return str(video_path)
+        return None
+
+    def _media_out_dir_and_stem(frame_idx: int | None = None) -> tuple[str, str]:
+        return resolve_media_output_dir_and_stem(
+            video_path, frame_file=_media_frame_file(frame_idx)
+        )
+
     def _ask_calib_scope() -> tuple[int | None, str] | None:
         """Ask Default (all frames) vs This frame. Returns (frame_or_None, label).
 
@@ -2655,10 +2850,10 @@ def play_video_with_controls(
         session = _ensure_quickmeasure_session()
         session.set_calibration(calib, frame=scope_frame)
         try:
-            paths = session.save_session(
-                os.path.dirname(video_path) or os.getcwd(),
-                stem=os.path.basename(video_path or "quickmeasure"),
+            out_dir, stem = _media_out_dir_and_stem(
+                scope_frame if scope_frame is not None else frame_count
             )
+            paths = session.save_session(out_dir, stem=stem)
             print(f">> vaila/quickmeasure: calibration saved in {paths['dir']}")
         except quickmeasure.QuickMeasureError:
             pass
@@ -3150,10 +3345,22 @@ def play_video_with_controls(
 
     # Auto-enable Pitch Guide in FIFA mode (CLI --fifa-dataset / GUI button).
     if pitch_guide_fifa_mode:
-        pitch_guide_points, pitch_guide_source = _load_pitch_guide_points(prefer_fifa_dataset=True)
+        pitch_guide_points, pitch_guide_source = _load_pitch_guide_points(
+            prefer_fifa_dataset=freekiki_session is None
+        )
         if pitch_guide_points:
             pitch_guide_mode = True
             fifa_fixed_keypoints = len(pitch_guide_points)
+        if freekiki_session is not None:
+            names, flips = freekiki_api.load_schema()
+            if (
+                [p["point_number"] for p in pitch_guide_points] != list(range(49))
+                or [p["point_name"] for p in pitch_guide_points] != names
+                or flips != freekiki_session["flip_idx"]
+            ):
+                raise ValueError("Kiki49 guide/schema mismatch")
+            template_keypoint_names = names
+            template_connections = frozenset(freekiki_api.load_bones())
         n_fix = max(1, int(fifa_fixed_keypoints if fifa_fixed_keypoints else 48))
         for fi in range(total_frames):
             row = coordinates.get(fi, [])
@@ -4544,22 +4751,17 @@ def play_video_with_controls(
         print(f">> AI Track: {variant} weights ready -> {path_str}")
         return path_str
 
-    def select_track_ai_weights() -> None:
-        """Cycle or select backbone deep feature weights (.pth/.pt) for Track AI.
-
-        Cycles through all four selectable backbones (resnet50, resnet152,
-        mobilenet_v3_small, efficientnet_b0). A variant with no local checkpoint
-        under ``vaila/models/ai_tracker/`` prompts to browse or download a clean
-        official ImageNet file into that folder. Past the last entry, opens a
-        file browser for a fully custom .pth/.pt (variant inferred from filename).
-        """
+    def choose_track_ai_weights() -> None:
+        """Modal dialog to select AI Track model weights (.pth / .pt) from directory or disk."""
         nonlocal track_ai_params, track_ai_use_deep, live_tracker
         nonlocal save_message_text, showing_save_message, save_message_timer
         from vaila.tracking import (
             AITrackerParameters,
             DeepFeatureExtractor,
-            get_available_resnet_checkpoints,
+            download_backbone_weights,
+            scan_all_ai_tracker_weights,
         )
+        from vaila.tracking.ai_tracker import _default_checkpoint_dir
 
         if track_ai_params is None:
             track_ai_params = AITrackerParameters(
@@ -4568,55 +4770,129 @@ def play_video_with_controls(
                 tracking_shape=track_ai_shape,
             )
 
+        ai_dir = _default_checkpoint_dir()
+        ai_dir.mkdir(parents=True, exist_ok=True)
+        found_weights = scan_all_ai_tracker_weights(ai_dir)
+
+        curr_w = getattr(track_ai_params, "deep_weights_path", "") or ""
+        curr_v = getattr(track_ai_params, "resnet_variant", "resnet50") or "resnet50"
+        active_tag = f"{os.path.basename(curr_w)} ({curr_v})" if curr_w else f"Default ({curr_v})"
+
+        lines = [
+            "==================================================",
+            "        AI Track – Model Weights (.pt / .pth)     ",
+            "==================================================",
+            f"Active: {active_tag}",
+            f"Directory: {ai_dir}",
+            "",
+            "Models found in directory:",
+        ]
+
+        if not found_weights:
+            lines.append("  (No .pt/.pth files found in directory)")
+        else:
+            for idx, p in enumerate(found_weights, 1):
+                marker = (
+                    " [Active: ✓]"
+                    if (curr_w and str(p.resolve()) == str(Path(curr_w).resolve()))
+                    else ""
+                )
+                lines.append(f"  [{idx}] {p.name}{marker}")
+
+        lines.extend(
+            [
+                "",
+                "  [B] Browse for .pt / .pth in any folder...",
+                "  [D] Download official ImageNet backbone weights...",
+                "  [R] Reset to default (resnet50_imagenet.pth)",
+                "",
+                "Select option or Esc to cancel:",
+            ]
+        )
+
+        prompt = "\n".join(lines)
+        choice = show_input_dialog(prompt, "1" if found_weights else "B")
+        if choice is None:
+            return
+
+        choice = choice.strip()
+        chosen_path: str = ""
+        inferred_variant: str = "resnet50"
+
         def _infer_variant_from_filename(path: str) -> str:
             name = os.path.basename(path).lower()
             if "resnet152" in name:
                 return "resnet152"
-            if "mobilenet_v3_small" in name:
+            if "mobilenet_v3_small" in name or "mobilenet" in name:
                 return "mobilenet_v3_small"
-            if "efficientnet_b0" in name:
+            if "efficientnet_b0" in name or "efficientnet" in name:
                 return "efficientnet_b0"
             return "resnet50"
 
-        # One cycle entry per discovered local checkpoint; one empty-path entry
-        # for any variant with none found locally yet (triggers browse/download).
-        _variants = ("resnet50", "resnet152", "mobilenet_v3_small", "efficientnet_b0")
-        entries: list[tuple[str, str]] = []
-        for _variant in _variants:
-            _local = get_available_resnet_checkpoints(_variant)
-            if _local:
-                entries.extend((_variant, str(p)) for p in _local)
-            else:
-                entries.append((_variant, ""))
-
-        curr_w = getattr(track_ai_params, "deep_weights_path", "") or ""
-        curr_v = getattr(track_ai_params, "resnet_variant", "resnet50") or "resnet50"
-        total_h = window_height + control_panel_height
-
-        cur_idx = entries.index((curr_v, curr_w)) if (curr_v, curr_w) in entries else -1
-        if cur_idx + 1 < len(entries):
-            inferred_variant, chosen_path = entries[cur_idx + 1]
-        else:
-            from vaila.tracking.ai_tracker import _default_checkpoint_dir
-
-            init_d = str(_default_checkpoint_dir())
-            _default_checkpoint_dir().mkdir(parents=True, exist_ok=True)
+        if choice.isdigit() and 1 <= int(choice) <= len(found_weights):
+            target_path = found_weights[int(choice) - 1]
+            chosen_path = str(target_path)
+            inferred_variant = _infer_variant_from_filename(chosen_path)
+        elif choice.lower() in ("b", "browse"):
+            total_h = window_height + control_panel_height
             custom = pygame_file_dialog(
-                initial_dir=init_d,
+                initial_dir=str(ai_dir),
                 file_extensions=[".pth", ".pt"],
                 restore_size=(window_width, total_h),
             )
-            chosen_path = custom if (custom and os.path.isfile(custom)) else ""
+            if not custom or not os.path.isfile(custom):
+                save_message_text = "AI Track: Browse cancelled"
+                showing_save_message = True
+                save_message_timer = 60
+                return
+            chosen_path = custom
             inferred_variant = _infer_variant_from_filename(chosen_path)
-
-        ensured = _ensure_track_ai_backbone_weights(
-            inferred_variant,
-            weights_path=chosen_path,
-            interactive=True,
-        )
-        if ensured is None:
+        elif choice.lower() in ("d", "download"):
+            dl_prompt = (
+                "Download official clean ImageNet backbone:\n\n"
+                "  [1] ResNet50 (Recommended, ~98 MB)\n"
+                "  [2] ResNet152 (High capacity, ~230 MB)\n"
+                "  [3] MobileNetV3-Small (Fast / CPU, ~10 MB)\n"
+                "  [4] EfficientNet-B0 (Balanced / CPU, ~20 MB)\n\n"
+                "Select [1-4] or Esc to cancel:"
+            )
+            dl_choice = show_input_dialog(dl_prompt, "1")
+            if not dl_choice:
+                return
+            variant_map = {
+                "1": "resnet50",
+                "2": "resnet152",
+                "3": "mobilenet_v3_small",
+                "4": "efficientnet_b0",
+            }
+            dl_var = variant_map.get(dl_choice.strip(), "resnet50")
+            try:
+                dest = download_backbone_weights(dl_var)
+                chosen_path = str(dest)
+                inferred_variant = dl_var
+            except Exception as dl_err:
+                save_message_text = f"AI Track: download failed ({dl_err})"
+                showing_save_message = True
+                save_message_timer = 120
+                return
+        elif choice.lower() in ("r", "reset"):
+            primary = ai_dir / "resnet50_imagenet.pth"
+            if primary.is_file():
+                chosen_path = str(primary)
+            else:
+                ensured = _ensure_track_ai_backbone_weights("resnet50", interactive=True)
+                if not ensured:
+                    return
+                chosen_path = ensured
+            inferred_variant = "resnet50"
+        else:
+            save_message_text = f"AI Track: invalid option '{choice}'"
+            showing_save_message = True
+            save_message_timer = 60
             return
-        chosen_path = ensured
+
+        if not chosen_path or not os.path.isfile(chosen_path):
+            return
 
         track_ai_params.deep_weights_path = chosen_path
         track_ai_params.use_deep_features = True
@@ -4626,10 +4902,9 @@ def play_video_with_controls(
 
         if live_tracker is not None:
             live_tracker.params = track_ai_params
-            # Backbone build can take seconds; keep the event loop pumping.
             _extractor, _ext_err = _run_blocking_with_loading_banner(
                 screen,
-                f"Loading {inferred_variant} weights",
+                f"Loading {os.path.basename(chosen_path)}",
                 lambda: DeepFeatureExtractor.get_shared(
                     weights_path=chosen_path, variant=inferred_variant
                 ),
@@ -4640,10 +4915,12 @@ def play_video_with_controls(
                 live_tracker.extractor = _extractor
 
         tag = os.path.basename(chosen_path)
-        save_message_text = f"AI Track: {inferred_variant} weights -> {tag}"
+        save_message_text = f"AI Track: Model ready -> {tag} ({inferred_variant})"
         showing_save_message = True
-        save_message_timer = 100
-        print(f">> AI Track: {inferred_variant} weights configured -> {chosen_path}")
+        save_message_timer = 120
+        print(f">> AI Track: {inferred_variant} weights loaded from {chosen_path}")
+
+    select_track_ai_weights = choose_track_ai_weights
 
     def _handle_track_ai_toml_dialog() -> None:
         """Modal dialog rendered natively in Pygame to Save, Load, or Reset Track AI parameters."""
@@ -5583,18 +5860,74 @@ def play_video_with_controls(
         nonlocal pitch_guide_points, pitch_guide_source, pitch_guide_mode
         nonlocal one_line_mode
         nonlocal _TEMPLATE_LABELS
+        nonlocal freekiki_session, freekiki_api
 
         if not isinstance(coordinates, dict):
             coordinates = {i: [] for i in range(total_frames)}
 
         mode = mode.strip().lower()
+        if freekiki_session is not None and mode != "freekiki":
+            raise ValueError("Save and close the FreeKiki session before changing template")
         _TEMPLATE_LABELS = skeleton_catalog.template_labels()
-        known = set(_TEMPLATE_LABELS) | set(skeleton_catalog.SPECIAL_TEMPLATE_IDS)
+        known = set(_TEMPLATE_LABELS) | set(skeleton_catalog.SPECIAL_TEMPLATE_IDS) | {"freekiki"}
         if mode not in known:
             mode = "free"
+        if mode not in ("free", "fifa", "freekiki"):
+            candidate = skeleton_catalog.get_template(mode)
+            target_n = (
+                int(candidate.num_keypoints)
+                if candidate is not None
+                else 33
+                if mode == "mediapipe"
+                else 17
+                if mode == "yolo"
+                else None
+            )
+            if target_n is not None and any(
+                any(p is not None and p != (None, None) for p in row[target_n:])
+                for row in coordinates.values()
+            ):
+                raise ValueError(f"Template has {target_n} slots; existing markers would be lost")
 
         # Back up before destructive reshape.
         make_backup()
+
+        if mode == "freekiki":
+            if any(
+                any(p is not None and p != (None, None) for p in row[49:])
+                for row in coordinates.values()
+            ):
+                raise ValueError("Existing markers beyond slot 48; save or clear them first")
+            if freekiki_api is None:
+                try:
+                    from . import freekiki as freekiki_api
+                except ImportError:
+                    import freekiki as freekiki_api  # ty: ignore[unresolved-import]
+            names, flips = freekiki_api.load_schema()
+            pts, src = _load_pitch_guide_points(prefer_fifa_dataset=False)
+            if (
+                [p["point_number"] for p in pts] != list(range(49))
+                or [p["point_name"] for p in pts] != names
+                or (freekiki_session is not None and freekiki_session["flip_idx"] != flips)
+            ):
+                raise ValueError("Kiki49 guide/schema mismatch")
+            if freekiki_session is None:
+                freekiki_session = freekiki_api.new_review_session(
+                    video_path, original_width, original_height, fps
+                )
+            template_mode = "freekiki"
+            template_keypoint_names = names
+            template_connections = frozenset(freekiki_api.load_bones())
+            pitch_guide_points, pitch_guide_source = pts, src
+            pitch_guide_fifa_mode = pitch_guide_mode = True
+            fifa_fixed_keypoints = 49
+            fifa_start_keypoint = fifa_index_base = 0
+            current_label = "football_pitch"
+            one_line_mode = False
+            for fi, row in coordinates.items():
+                coordinates[fi] = list(row[:49]) + [(None, None)] * max(0, 49 - len(row))
+            selected_marker_idx = 0
+            return
 
         if mode == "free":
             template_mode = "free"
@@ -5645,6 +5978,11 @@ def play_video_with_controls(
             fifa_fixed_keypoints = int(spec.num_keypoints)
 
         n = max(1, int(fifa_fixed_keypoints))
+        if any(
+            any(p is not None and p != (None, None) for p in row[n:])
+            for row in coordinates.values()
+        ):
+            raise ValueError(f"Template has {n} slots; existing markers would be lost")
         new_coords: dict[int, list[tuple[Any, Any]]] = {}
         for i in range(total_frames):
             old = list(coordinates.get(i, []))
@@ -5661,16 +5999,29 @@ def play_video_with_controls(
         selected_marker_idx = 0
 
     def _ask_template_mode() -> str | None:
-        """Open column dialog to pick Free / Soccer-Kiki / pose presets."""
-        answer = show_input_dialog(skeleton_catalog.format_template_dialog_prompt(), "0")
-        return skeleton_catalog.resolve_dialog_choice(answer)
+        """Open column dialog to pick Free / Soccer-Kiki / FreeKiki / pose presets."""
+        return skeleton_catalog.resolve_dialog_choice(
+            show_input_dialog(skeleton_catalog.format_template_dialog_prompt(), "0")
+        )
 
     def _cycle_template_mode() -> str | None:
         """Open the Tpl picker dialog and apply. Returns chosen id, or None if cancelled."""
+        nonlocal save_message_text, showing_save_message, save_message_timer
         chosen = _ask_template_mode()
         if chosen is None:
             return None
-        _apply_template_mode(chosen)
+        if chosen == skeleton_catalog.FREEKIKI_LOAD_ID:
+            save_message_text = _freekiki_load()
+            showing_save_message = True
+            save_message_timer = 240
+            return "error"  # message already set; callers keep it
+        try:
+            _apply_template_mode(chosen)
+        except ValueError as exc:
+            save_message_text = str(exc)
+            showing_save_message = True
+            save_message_timer = 180
+            return "error"
         return chosen
 
     def draw_controls():
@@ -6072,6 +6423,7 @@ def play_video_with_controls(
         labeling_button_width = 58 if is_compact else 66
         calib_button_width = 48 if is_compact else 54  # CALIB — Shift+Q
         measure_button_width = 50 if is_compact else 58  # MEASURE — hotkey Q
+        measure_overlay_toggle_size = 10 if is_compact else 12
         fps_button_width = 72 if is_compact else 80  # Manual video frequency (same as hotkey I)
         guide_button_width = 56 if is_compact else 66  # Guide button (field / skeleton overlay)
         guide_toggle_size = 10 if is_compact else 12
@@ -6088,11 +6440,10 @@ def play_video_with_controls(
         track_deep_group_width = track_deep_check_size + 4 + track_deep_label_w
         track_shape_button_width = 44 if is_compact else 52
         track_cfg_button_width = 30 if is_compact else 36
+        track_weights_button_width = 44 if is_compact else 52  # Model (.pt/.pth selector)
         editor_mode_button_width = 58 if is_compact else 70  # VISUAL / INSERT
         restore_button_width = 54 if is_compact else 62
         dataset_button_width = 52 if is_compact else 58
-        export_video_button_width = 80 if is_compact else 92
-        save_dataset_button_width = 72 if is_compact else 84
         rename_markers_button_width = 58 if is_compact else 66
 
         # Top row: VISUAL/INSERT + Template + annotation modes + Help
@@ -6106,6 +6457,8 @@ def play_video_with_controls(
             + labeling_button_width
             + calib_button_width
             + measure_button_width
+            + 4
+            + measure_overlay_toggle_size
             + fps_button_width
             + guide_button_width
             + 4
@@ -6115,7 +6468,7 @@ def play_video_with_controls(
             + (button_gap * 12)
         )
 
-        # Bottom row: Tracking, File I/O (Load/Save), Dataset and Export buttons
+        # Bottom row: Tracking, Model Weights, File I/O (Load/Save/Restore/Dataset)
         total_bottom_width = (
             tracking_csv_button_width
             + 4
@@ -6131,19 +6484,17 @@ def play_video_with_controls(
             + button_gap
             + track_cfg_button_width
             + button_gap
+            + track_weights_button_width
+            + button_gap
             + button_width  # Load
             + button_gap
-            + button_width  # Save
+            + button_width  # Save (Unified Save & Export Hub)
             + button_gap
             + restore_button_width
             + button_gap
             + dataset_button_width
             + button_gap
-            + export_video_button_width
-            + button_gap
             + rename_markers_button_width
-            + button_gap
-            + save_dataset_button_width
         )
 
         # Center both command rows horizontally (clamp to left margin if row is wider than window).
@@ -6301,12 +6652,24 @@ def play_video_with_controls(
             measure_button_width,
             button_height,
         )
-        current_x += measure_button_width + button_gap
+        measure_overlay_toggle_rect = pygame.Rect(
+            measure_button_rect.right + 4,
+            measure_button_rect.centery - measure_overlay_toggle_size // 2,
+            measure_overlay_toggle_size,
+            measure_overlay_toggle_size,
+        )
+        current_x += measure_button_width + 4 + measure_overlay_toggle_size + button_gap
         measure_color = (200, 90, 40) if measure_mode else (100, 100, 100)
         pygame.draw.rect(control_surface, measure_color, measure_button_rect)
         measure_label = "Meas" if is_compact else "MEASURE"
         measure_text = _top_btn_font.render(measure_label, True, (255, 255, 255))
         control_surface.blit(measure_text, measure_text.get_rect(center=measure_button_rect.center))
+        if show_measure_overlay:
+            pygame.draw.rect(control_surface, (0, 255, 0), measure_overlay_toggle_rect)
+            pygame.draw.rect(control_surface, (255, 255, 255), measure_overlay_toggle_rect, 1)
+        else:
+            pygame.draw.rect(control_surface, (60, 60, 60), measure_overlay_toggle_rect)
+            pygame.draw.rect(control_surface, (150, 150, 150), measure_overlay_toggle_rect, 1)
 
         # 7c. Manual FPS button (same dialog as hotkey I); caption shows current Hz.
         fps_button_rect = pygame.Rect(
@@ -6512,6 +6875,20 @@ def play_video_with_controls(
         cfg_text = btn_font.render("Cfg", True, (255, 255, 255))
         control_surface.blit(cfg_text, cfg_text.get_rect(center=track_cfg_button_rect.center))
 
+        # 5b. Track AI Model Weights button (.pt / .pth weights selector)
+        track_weights_button_rect = pygame.Rect(
+            current_x,
+            cluster_y_bottom,
+            track_weights_button_width,
+            button_height,
+        )
+        current_x += track_weights_button_width + button_gap
+        pygame.draw.rect(control_surface, (65, 55, 90), track_weights_button_rect)
+        weights_text = btn_font.render("Model", True, (255, 255, 255))
+        control_surface.blit(
+            weights_text, weights_text.get_rect(center=track_weights_button_rect.center)
+        )
+
         # 6. Load button (Steel blue)
         load_button_rect = pygame.Rect(current_x, cluster_y_bottom, button_width, button_height)
         current_x += button_width + button_gap
@@ -6519,7 +6896,7 @@ def play_video_with_controls(
         load_text = btn_font.render("Load", True, (255, 255, 255))
         control_surface.blit(load_text, load_text.get_rect(center=load_button_rect.center))
 
-        # 7. Save button (Prominent emerald green for immediate visibility)
+        # 7. Save button (Prominent emerald green - opens Save & Export Hub)
         save_button_rect = pygame.Rect(
             current_x,
             cluster_y_bottom,
@@ -6555,23 +6932,7 @@ def play_video_with_controls(
         dataset_text = btn_font.render("Dataset", True, (255, 255, 255))
         control_surface.blit(dataset_text, dataset_text.get_rect(center=dataset_button_rect.center))
 
-        # 9. Export Video button
-        export_video_button_rect = pygame.Rect(
-            current_x,
-            cluster_y_bottom,
-            export_video_button_width,
-            button_height,
-        )
-        current_x += export_video_button_width + button_gap
-        export_video_color = (190, 95, 45)
-        pygame.draw.rect(control_surface, export_video_color, export_video_button_rect)
-        export_video_label = "Export Vid" if is_compact else "Export Video"
-        export_video_text = btn_font.render(export_video_label, True, (255, 255, 255))
-        control_surface.blit(
-            export_video_text, export_video_text.get_rect(center=export_video_button_rect.center)
-        )
-
-        # 10. Rename markers (COCO/custom class or keypoint names) — before Save ML
+        # 9. Rename markers (COCO/custom class or keypoint names)
         rename_markers_button_rect = pygame.Rect(
             current_x,
             cluster_y_bottom,
@@ -6584,20 +6945,6 @@ def play_video_with_controls(
         control_surface.blit(
             rename_markers_text,
             rename_markers_text.get_rect(center=rename_markers_button_rect.center),
-        )
-
-        # 11. Save ML button
-        save_dataset_button_rect = pygame.Rect(
-            current_x,
-            cluster_y_bottom,
-            save_dataset_button_width,
-            button_height,
-        )
-        current_x += save_dataset_button_width + button_gap
-        pygame.draw.rect(control_surface, (70, 130, 70), save_dataset_button_rect)
-        save_dataset_text = btn_font.render("Save ML", True, (255, 255, 255))
-        control_surface.blit(
-            save_dataset_text, save_dataset_text.get_rect(center=save_dataset_button_rect.center)
         )
 
         # Display current class label when in labeling mode (same band as frame / Go KP)
@@ -6636,6 +6983,7 @@ def play_video_with_controls(
             labeling_button_rect,  # Add labeling button to return
             calib_button_rect,  # CALIB (Shift+Q)
             measure_button_rect,  # MEASURE (Q)
+            measure_overlay_toggle_rect,  # Show/hide measure value overlays
             fps_button_rect,  # Manual video FPS in Hz (same as I)
             guide_button_rect,  # Guide button (field/skeleton)
             guide_toggle_rect,  # Guide on/off indicator
@@ -6646,11 +6994,10 @@ def play_video_with_controls(
             track_deep_button_rect,  # Deep checkbox (option for AI Track)
             track_shape_button_rect,  # Track AI Shape selector (Point/Circle/Box)
             track_cfg_button_rect,  # Track AI TOML configuration dialog
+            track_weights_button_rect,  # Track AI Model weights (.pt/.pth) selector
             editor_mode_button_rect,  # VISUAL / INSERT (Ctrl+I)
             restore_button_rect,  # Restore to last Save / open
-            export_video_button_rect,  # Add export video button to return
             rename_markers_button_rect,  # Rename p0/p1… → COCO/custom
-            save_dataset_button_rect,  # Export PNG ML dataset + all_labels
             help_web_button_rect,  # Add help web button to return
             dataset_button_rect,  # Load dataset folder (multi-video)
             goto_marker_button_rect,  # Jump to marker index
@@ -6911,14 +7258,20 @@ def play_video_with_controls(
         nonlocal one_line_mode
         if not isinstance(coordinates, dict):
             coordinates = {i: [] for i in range(total_frames)}
+        next_points, next_source = _load_pitch_guide_points(prefer_fifa_dataset=True)
+        n = max(1, len(next_points) if next_points else 48)
+        if any(
+            any(p is not None and p != (None, None) for p in row[n:])
+            for row in coordinates.values()
+        ):
+            raise ValueError(f"Soccer-Kiki template has {n} slots; existing markers would be lost")
         one_line_mode = False
         pitch_guide_fifa_mode = True
-        pitch_guide_points, pitch_guide_source = _load_pitch_guide_points(prefer_fifa_dataset=True)
-        fifa_fixed_keypoints = len(pitch_guide_points) if pitch_guide_points else 48
+        pitch_guide_points, pitch_guide_source = next_points, next_source
+        fifa_fixed_keypoints = n
         fifa_start_keypoint = 0
         fifa_index_base = 0
         current_label = "football_pitch"
-        n = max(1, int(fifa_fixed_keypoints))
         new_coords: dict[int, list[tuple[Any, Any]]] = {}
         for i in range(total_frames):
             old = list(coordinates.get(i, []))
@@ -7190,9 +7543,9 @@ def play_video_with_controls(
                 "item",
             ),
             (
-                "Ctrl+W  /  Alt+W",
-                "Cycle backbone: ResNet50 -> ResNet152 -> MobileNetV3-Small ->"
-                " EfficientNet-B0 -> custom file -> repeat; missing ones auto-download",
+                "Model button / Ctrl+M / Ctrl+W",
+                "Select model weights (.pt / .pth) from models/ai_tracker or disk; "
+                "supports ResNet, MobileNet, EfficientNet and custom checkpoints",
                 "item",
             ),
             (
@@ -7301,21 +7654,16 @@ def play_video_with_controls(
             ),
             ("F8", "Switch to another video while retaining active dataset", "item"),
             ("", "", "blank"),
-            ("=== DATASET & VIDEO EXPORTS ===", "", "header"),
-            ("F9", "Export YOLO-pose dataset from markers (single-object pose estimation)", "item"),
+            ("=== DATASET & VIDEO EXPORTS (SAVE & EXPORT HUB) ===", "", "header"),
+            (
+                "Save button  /  Ctrl+S",
+                "Open Unified Save & Export Hub: Quick Save [1], Markers CSV [2], "
+                "YOLO Pose [3], YOLO Detect [4], Export Video [5], FreeKiki [6], Multi-video [7]",
+                "item",
+            ),
             (
                 "Ctrl + N  /  'Rename'",
                 "Rename marker slots p0/p1… to COCO-80 or custom (pose kpts / detect classes)",
-                "item",
-            ),
-            (
-                "Ctrl + E  /  'Save ML'",
-                "Export split ML dataset (1=pose 2=detect) + all_labels",
-                "item",
-            ),
-            (
-                "Export Video button",
-                "Render and export video with burned-in annotations and markers",
                 "item",
             ),
             (
@@ -7324,8 +7672,13 @@ def play_video_with_controls(
                 "item",
             ),
             (
-                "Load  /  Save buttons",
-                "Import or export CSV marker coordinates (<video>_markers.csv)",
+                "Load button",
+                "Import CSV marker coordinates (<video>_markers.csv)",
+                "item",
+            ),
+            (
+                "Model button  /  Ctrl+M",
+                "Select AI Track model weights (.pt/.pth) from models/ai_tracker or disk",
                 "item",
             ),
             ("", "", "blank"),
@@ -9228,6 +9581,14 @@ def play_video_with_controls(
         sibling JSON project file with the raw markers (for later re-editing).
         """
         nonlocal save_message_text, showing_save_message, save_message_timer, current_dataset_dir
+        if freekiki_session is not None:
+            try:
+                save_message_text = _review_action("export")
+            except (OSError, ValueError, RuntimeError) as exc:
+                save_message_text = f"FreeKiki: {exc}"
+            showing_save_message = True
+            save_message_timer = 180
+            return True
 
         # Guard against the most common mistake: exporting a POSE dataset after
         # loading SAM3 bbox tracks and converting them to markers. Pose makes a
@@ -9607,6 +9968,11 @@ def play_video_with_controls(
     def save_split_dataset_with_all_labels():
         """Export split PNG dataset (pose or detect) and build all_labels view."""
         nonlocal save_message_text, showing_save_message, save_message_timer, current_dataset_dir
+        if freekiki_session is not None:
+            save_message_text = "FreeKiki exports only human reviewed frames (F9)"
+            showing_save_message = True
+            save_message_timer = 120
+            return
         task, task_label = _choose_ml_export_task()
         if task is None:
             save_message_text = task_label
@@ -9641,7 +10007,329 @@ def play_video_with_controls(
         showing_save_message = True
         save_message_timer = 180 if ok_all else 120
 
-    def show_file_browser(start_dir, title="Select a file", extensions=None):
+    def _count_marked_frames() -> int:
+        if one_line_mode and one_line_markers:
+            return len(one_line_markers)
+        if not isinstance(coordinates, dict):
+            return 0
+        return sum(
+            1
+            for pts in coordinates.values()
+            if any(p is not None and p != (None, None) for p in pts)
+        )
+
+    def _coordinates_from_quickmeasure(
+        session: quickmeasure.QuickMeasureSession,
+    ) -> dict[int, list[tuple[float, float]]]:
+        """Map Quick Measure clicks into the marker CSV layout (by frame)."""
+        by_frame: dict[int, list[tuple[float, float]]] = {}
+        for point in session.points:
+            by_frame.setdefault(int(point.frame), []).append((float(point.x), float(point.y)))
+        return by_frame
+
+    def _autosave_quickmeasure_session() -> str | None:
+        """Refresh processed_quickmeasure_* when the session has anything to write."""
+        if quickmeasure_session is None:
+            return None
+        if (
+            not quickmeasure_session.points
+            and not quickmeasure_session.results
+            and not quickmeasure_session.has_any_calibration()
+        ):
+            return None
+        out_dir, stem = _media_out_dir_and_stem()
+        try:
+            paths = quickmeasure_session.save_session(out_dir, stem=stem)
+        except quickmeasure.QuickMeasureError:
+            return None
+        print(f">> vaila/quickmeasure: saved CSVs in {paths['dir']}")
+        return paths["dir"]
+
+    def _save_markers_csv_smart() -> tuple[str | None, str]:
+        """Save markers; if empty but Quick Measure has points, export those clicks.
+
+        Also refreshes the Quick Measure export folder when present so Save hub
+        does not leave an empty markers CSV while measures live only in QM.
+        """
+        coords_to_save = coordinates
+        deleted_to_save = deleted_positions
+        source_note = "markers"
+        n_marked = _count_marked_frames()
+        if (
+            n_marked == 0
+            and quickmeasure_session is not None
+            and quickmeasure_session.points
+            and not one_line_mode
+        ):
+            coords_to_save = _coordinates_from_quickmeasure(quickmeasure_session)
+            deleted_to_save = {frame: set() for frame in coords_to_save}
+            source_note = "Quick Measure points"
+            n_marked = len(coords_to_save)
+
+        frame_file = _media_frame_file()
+        output_file = None
+        if n_marked > 0 or (
+            isinstance(coords_to_save, dict)
+            and any(
+                p is not None and p != (None, None) for pts in coords_to_save.values() for p in pts
+            )
+        ):
+            output_file = save_coordinates(
+                video_path,
+                coords_to_save,
+                total_frames,
+                deleted_to_save,
+                is_sequential=sequential_mode,
+                fixed_keypoints_count=(fifa_fixed_keypoints if template_mode != "free" else None),
+                keypoint_start_idx=(fifa_start_keypoint if template_mode != "free" else 0),
+                keypoint_index_base=(fifa_index_base if template_mode != "free" else 0),
+                coord_format=coord_format,
+                coord_decimals=coord_decimals,
+                frame_file=frame_file,
+            )
+
+        qm_dir = _autosave_quickmeasure_session()
+        bits: list[str] = []
+        if output_file:
+            bits.append(f"{source_note} → {os.path.basename(output_file)}")
+        if qm_dir:
+            bits.append(f"Quick Measure → {os.path.basename(qm_dir)}")
+        if not bits:
+            return None, "Nothing to save — place markers or finish a MEASURE."
+        return output_file, "; ".join(bits)
+
+    def show_save_menu_dialog() -> None:
+        """Modal dialog displaying all save and export options in a unified Save & Export Hub."""
+        nonlocal save_message_text, showing_save_message, save_message_timer
+        nonlocal saved, current_dataset_dir
+        nonlocal \
+            coordinates, \
+            deleted_positions, \
+            sequential_mode, \
+            one_line_mode, \
+            one_line_markers, \
+            deleted_markers
+        nonlocal \
+            template_mode, \
+            fifa_fixed_keypoints, \
+            fifa_start_keypoint, \
+            fifa_index_base, \
+            coord_format, \
+            coord_decimals
+        nonlocal \
+            labeling_mode, \
+            bboxes, \
+            csv_loaded, \
+            tracking_data, \
+            bbox_converted_to_markers, \
+            freekiki_session
+
+        n_marked_frames = _count_marked_frames()
+        qm_points = len(quickmeasure_session.points) if quickmeasure_session is not None else 0
+        qm_results = len(quickmeasure_session.results) if quickmeasure_session is not None else 0
+
+        in_freekiki = freekiki_session is not None
+
+        _media_dir, base_v = _media_out_dir_and_stem()
+        csv_target = f"{base_v}_markers.csv" if not one_line_mode else f"{base_v}_1_line.csv"
+
+        if in_freekiki:
+            default_desc = "Save FreeKiki session & export reviewed frames (F9)"
+        elif labeling_mode and bboxes:
+            default_desc = f"Save BBox labeling project ({len(bboxes)} annotated frames)"
+        elif csv_loaded and tracking_data and not bbox_converted_to_markers:
+            default_desc = f"Export YOLO BBox dataset ({len(tracking_data)} frames)"
+        elif one_line_mode:
+            default_desc = f"Save 1-line coordinates CSV -> {csv_target} ({n_marked_frames} points)"
+        elif n_marked_frames > 0:
+            default_desc = f"Save Markers CSV -> {csv_target} ({n_marked_frames} frames marked)"
+        elif qm_points > 0:
+            default_desc = (
+                f"Export Quick Measure clicks -> {csv_target} "
+                f"({qm_points} pts, {qm_results} results) + report"
+            )
+        else:
+            default_desc = f"Save Markers CSV -> {csv_target} ({n_marked_frames} frames marked)"
+
+        if n_marked_frames > 0:
+            csv_status = f"Ready ({n_marked_frames} frames)"
+        elif qm_points > 0:
+            csv_status = f"Empty markers — will export {qm_points} Quick Measure clicks"
+        else:
+            csv_status = "Empty (0 markers)"
+        pose_status = (
+            f"Ready ({n_marked_frames} frames)" if n_marked_frames > 0 else "Needs markers"
+        )
+        detect_status = (
+            f"Ready ({len(bboxes)} frames)"
+            if (labeling_mode and bboxes)
+            else (
+                f"Ready from markers ({n_marked_frames} frames)" if n_marked_frames > 0 else "Empty"
+            )
+        )
+        freekiki_status = "Active Session" if in_freekiki else "Not active"
+        qm_status = (
+            f"Ready ({qm_results} results, {qm_points} points)"
+            if (qm_points or qm_results)
+            else "No Quick Measure data"
+        )
+
+        prompt = (
+            "==================================================\n"
+            "             vailá – Save & Export Hub\n"
+            "==================================================\n"
+            f"[1] Quick Save (Default Context Action)\n"
+            f"    -> {default_desc}\n"
+            f"    Quick Measure: {qm_status}\n\n"
+            f"[2] Markers Coordinates CSV\n"
+            f"    -> Save (x, y) coordinates to {csv_target}\n"
+            f"    Status: {csv_status}\n\n"
+            f"[3] YOLO Pose Dataset (Train / Val / Test)\n"
+            f"    -> Frame images + normalized keypoints .txt + data.yaml\n"
+            f"    Status: {pose_status}\n\n"
+            f"[4] YOLO Detection Dataset (Bounding Boxes)\n"
+            f"    -> Frame images + normalized bboxes .txt + data.yaml\n"
+            f"    Status: {detect_status}\n\n"
+            f"[5] Export Video with Annotations (.mp4)\n"
+            f"    -> Render video with marked markers, skeletons & labels\n"
+            f"    Status: Ready\n\n"
+            f"[6] FreeKiki Human-Reviewed Session & Dataset (F9)\n"
+            f"    -> Save session.json & export verified keypoint dataset\n"
+            f"    Status: {freekiki_status}\n\n"
+            f"[7] Multi-Video Dataset Folder (Attach/Change, F7)\n"
+            f"    -> Current: {os.path.basename(current_dataset_dir) if current_dataset_dir else 'None (new folder per export)'}\n\n"
+            "Select option [1-7] (Enter = 1, Esc = cancel):"
+        )
+
+        choice = show_input_dialog(prompt, "1")
+        if choice is None:
+            return
+
+        choice = choice.strip()
+        if choice in ("", "1"):
+            if in_freekiki:
+                try:
+                    save_message_text = _review_action("save")
+                except (OSError, ValueError, RuntimeError) as exc:
+                    save_message_text = f"FreeKiki: {exc}"
+                showing_save_message = True
+                save_message_timer = 90
+            elif labeling_mode and bboxes:
+                save_labeling_project()
+                _refresh_restore_snapshot()
+                undo_stack.clear()
+                showing_save_message = True
+                save_message_timer = 60
+            elif csv_loaded and tracking_data and not bbox_converted_to_markers:
+                save_message_text = (
+                    f"Saving YOLO dataset from {len(tracking_data)} annotated frames..."
+                )
+                showing_save_message = True
+                save_message_timer = 240
+                _flush_save_message(screen, save_message_text)
+                export_boxes = normalize_bboxes_for_labeling(
+                    tracking_data, label_fallback=current_label or "object"
+                )
+                dataset_dir, message = export_labeling_dataset(
+                    video_path,
+                    export_boxes,
+                    total_frames,
+                    original_width,
+                    original_height,
+                    output_dataset_dir=current_dataset_dir,
+                )
+                if dataset_dir:
+                    saved = True
+                    _refresh_restore_snapshot()
+                    undo_stack.clear()
+                    save_message_text = f"BBox dataset saved: {os.path.basename(dataset_dir)}" + (
+                        " (appended)" if current_dataset_dir else ""
+                    )
+                else:
+                    save_message_text = f"BBox export failed: {message}"
+                showing_save_message = True
+                save_message_timer = 120
+            elif one_line_mode:
+                output_file = save_1_line_coordinates(video_path, one_line_markers, deleted_markers)
+                saved = True
+                _refresh_restore_snapshot()
+                undo_stack.clear()
+                save_message_text = f"Saved to: {os.path.basename(output_file)}"
+                showing_save_message = True
+                save_message_timer = 90
+            else:
+                save_message_text = "Saving markers / Quick Measure..."
+                showing_save_message = True
+                save_message_timer = 240
+                _flush_save_message(screen, save_message_text)
+                _out, detail = _save_markers_csv_smart()
+                saved = _out is not None or "Quick Measure" in detail
+                _refresh_restore_snapshot()
+                undo_stack.clear()
+                save_message_text = f"Saved: {detail}"
+                showing_save_message = True
+                save_message_timer = 120
+
+        elif choice == "2":
+            if one_line_mode:
+                output_file = save_1_line_coordinates(video_path, one_line_markers, deleted_markers)
+                saved = True
+                _refresh_restore_snapshot()
+                undo_stack.clear()
+                save_message_text = f"Saved to: {os.path.basename(output_file)}"
+            else:
+                save_message_text = "Saving markers / Quick Measure..."
+                showing_save_message = True
+                save_message_timer = 240
+                _flush_save_message(screen, save_message_text)
+                _out, detail = _save_markers_csv_smart()
+                saved = _out is not None or "Quick Measure" in detail
+                _refresh_restore_snapshot()
+                undo_stack.clear()
+                save_message_text = f"Saved: {detail}"
+            showing_save_message = True
+            save_message_timer = 120
+
+        elif choice == "3":
+            save_split_dataset_with_all_labels()
+
+        elif choice == "4":
+            if labeling_mode and bboxes:
+                save_labeling_project()
+                _refresh_restore_snapshot()
+                undo_stack.clear()
+                showing_save_message = True
+                save_message_timer = 90
+            else:
+                split_ratios, split_label = _choose_ml_split_ratios()
+                if split_ratios is not None:
+                    save_detect_dataset_from_markers(split_ratios=split_ratios, image_format="png")
+
+        elif choice == "5":
+            export_video_with_annotations()
+
+        elif choice == "6":
+            if in_freekiki:
+                try:
+                    save_message_text = _review_action("save")
+                except (OSError, ValueError, RuntimeError) as exc:
+                    save_message_text = f"FreeKiki: {exc}"
+                showing_save_message = True
+                save_message_timer = 120
+            else:
+                save_message_text = "FreeKiki session is not active for this video"
+                showing_save_message = True
+                save_message_timer = 90
+
+        elif choice == "7":
+            load_dataset_folder()
+
+        else:
+            save_message_text = f"Invalid option '{choice}' (choose 1-7 or Esc)"
+            showing_save_message = True
+            save_message_timer = 60
+
+    def show_file_browser(start_dir, title="Select a file", extensions=None, select_dir=False):
         """Pygame-based file browser with mouse navigation, Ctrl+V paste, and scroll.
         Returns selected file path or None on cancel (Escape).
         *extensions*: list of lowercase extensions to highlight, e.g. ['.yaml']
@@ -9896,11 +10584,19 @@ def play_video_with_controls(
                         filter_yaml_only = not filter_yaml_only
                         list_dir(cur_dir)
 
+                    elif select_dir and event.key == pygame.K_RETURN and not input_active:
+                        # Folder mode: Enter uses the folder being shown
+                        result_path = cur_dir
+                        browsing = False
+
                     elif input_active:
                         if event.key == pygame.K_RETURN:
                             # Confirm typed path
                             typed = input_text.strip()
-                            if os.path.isfile(typed):
+                            if select_dir and os.path.isdir(typed):
+                                result_path = os.path.abspath(typed)
+                                browsing = False
+                            elif os.path.isfile(typed):
                                 result_path = typed
                                 browsing = False
                             elif os.path.isdir(typed):
@@ -10349,8 +11045,7 @@ def play_video_with_controls(
         if not os.path.exists(video_path):
             return
 
-        base_name = os.path.splitext(os.path.basename(video_path))[0]
-        video_dir = os.path.dirname(video_path)
+        video_dir, base_name = _media_out_dir_and_stem()
         history_root = (
             marker_history_dir_override
             if marker_history_dir_override
@@ -10566,7 +11261,7 @@ def play_video_with_controls(
             # Try CSV file dialog first
             csv_path = pygame_file_dialog(
                 initial_dir=initial_dir,
-                file_extensions=[".csv"],
+                file_extensions=[".csv", ".json", ".yaml"],
                 restore_size=(window_width, window_height + control_panel_height),
             )
 
@@ -10613,7 +11308,10 @@ def play_video_with_controls(
                     # CSV file
                     input_path = filedialog.askopenfilename(
                         title="Select CSV File",
-                        filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")],
+                        filetypes=[
+                            ("Markers / FreeKiki session", "*.csv *.json *.yaml"),
+                            ("All Files", "*.*"),
+                        ],
                         initialdir=initial_dir,
                     )
                 elif choice is False:
@@ -10646,6 +11344,33 @@ def play_video_with_controls(
             save_message_text = "File/folder selection cancelled."
             showing_save_message = True
             save_message_timer = 60
+            return
+
+        # A corrected dataset/session takes precedence over the original predictions.
+        source = Path(input_path)
+        folder = source if source.is_dir() else source.parent
+        if (folder / "session.json").is_file():
+            try:
+                save_message_text = _resume_freekiki(folder / "session.json")
+            except (OSError, ValueError, KeyError) as exc:
+                save_message_text = f"FreeKiki session not loaded: {exc}"
+            showing_save_message = True
+            save_message_timer = 240
+            return
+
+        # A freekiki detect output (folder or one of its CSVs): correction mode.
+        try:
+            from .freekiki import detect_output_dir
+        except ImportError:
+            from freekiki import detect_output_dir  # ty: ignore[unresolved-import]
+        run_dir = detect_output_dir(input_path)
+        if run_dir is not None:
+            try:
+                save_message_text = _load_freekiki_run(run_dir)
+            except (OSError, ValueError, KeyError) as exc:
+                save_message_text = f"FreeKiki run not loaded: {exc}"
+            showing_save_message = True
+            save_message_timer = 240
             return
 
         # Check if it's a YOLO dataset directory
@@ -10884,6 +11609,469 @@ def play_video_with_controls(
     # Session-open restore checkpoint (refreshed after successful Save).
     _refresh_restore_snapshot()
 
+    def _review_sync(fi: int) -> None:
+        if (
+            freekiki_session is None
+            or not isinstance(coordinates, dict)
+            or not 0 <= fi < total_frames
+        ):
+            return
+        freekiki_session["cursor"] = {"frame": frame_count, "point": selected_marker_idx}
+        pts = coordinates.get(fi, [])
+        if (
+            str(fi) not in freekiki_session["frames"]
+            and not any(p is not None and p != (None, None) for p in pts)
+            and not deleted_positions.get(fi)
+        ):
+            return
+        row = freekiki_api.review_frame(freekiki_session, fi)
+        if len(pts) > 49 and any(p != (None, None) for p in pts[49:]):
+            raise ValueError("FreeKiki frame has markers beyond slot 48")
+        w = float(freekiki_session.get("width") or original_width or 0)
+        h = float(freekiki_session.get("height") or original_height or 0)
+        for i in range(49):
+            point = pts[i] if i < len(pts) else None
+            if i in deleted_positions.get(fi, set()):
+                point = None
+            if point is None or point[0] is None or point[1] is None:
+                point = None
+            else:
+                try:
+                    px, py = float(point[0]), float(point[1])
+                    if math.isfinite(px) and math.isfinite(py):
+                        if w > 0 and h > 0:
+                            px = max(0.0, min(w, px))
+                            py = max(0.0, min(h, py))
+                        point = [px, py]
+                    else:
+                        point = None
+                except (TypeError, ValueError):
+                    point = None
+            if point != row["points"][i]:
+                try:
+                    freekiki_api.edit_review_point(freekiki_session, fi, i, point)
+                except Exception as exc:
+                    print(f"Warning: FreeKiki sync failed for frame {fi}, marker {i}: {exc}")
+        hidden = sorted(deleted_positions.get(fi, set()))
+        if hidden != row.get("hidden", []) and row["state"] in ("HUMAN_REVIEWED", "EXPORTED"):
+            row["state"] = "DRAFT_MANUAL"
+        row["hidden"] = hidden
+
+    def _review_sync_all() -> None:
+        if freekiki_session is None or not isinstance(coordinates, dict):
+            return
+        for fi in list(coordinates.keys()):
+            _review_sync(int(fi))
+
+    def _review_action(action: str) -> str:
+        nonlocal selected_marker_idx, frame_count, paused, freekiki_export_mode
+        if freekiki_session is None or not isinstance(coordinates, dict):
+            return "FreeKiki session is not active"
+        _review_sync(frame_count)
+        if action == "mode":
+            freekiki_export_mode = "only_correct" if freekiki_export_mode == "full" else "full"
+            mode_desc = (
+                "FULL (corrected + predicted)"
+                if freekiki_export_mode == "full"
+                else "ONLY CORRECT (reviewed only)"
+            )
+            return f"FreeKiki: Save dataset mode set to {mode_desc}"
+        if action == "load":
+            # Same as Tpl -> L: a freekiki run/batch folder opens its video to correct.
+            return _freekiki_load()
+        if action == "discard":
+            # X: a bad frame (wrong camera, blur, replay graphics) leaves the dataset.
+            state = freekiki_api.discard_review_frame(freekiki_session, frame_count)
+            row = freekiki_api.review_frame(freekiki_session, frame_count)
+            coordinates[frame_count] = [
+                tuple(p) if p is not None else (None, None) for p in row["points"]
+            ]
+            deleted_positions[frame_count] = set()
+            freekiki_api.save_review_session(freekiki_session)
+            if state != "DISCARDED":
+                return f"Frame {frame_count} restored ({state}); X again discards it"
+            nxt = _review_action("next")
+            return f"Frame {frame_count} discarded (not in the dataset; X restores) | {nxt}"
+        if action == "next":
+            pending = sorted(
+                int(f)
+                for f, row in freekiki_session["frames"].items()
+                if row["state"] in ("AI_DRAFT", "DRAFT_MANUAL")
+            )
+            if not pending:
+                return "No draft frames left: F9 = save dataset"
+            frame_count = next((f for f in pending if f > frame_count), pending[0])
+            paused = True
+            return f"Draft frame {frame_count} ({len(pending)} drafts left)"
+        if action == "accept":
+            # F10: take the ghost of the selected point (or the first ghost).
+            ghosts = freekiki_api.review_suggestions(freekiki_session, frame_count)["suggestions"]
+            ghost = next((g for g in ghosts if g["index"] == selected_marker_idx), None)
+            ghost = ghost or (ghosts[0] if ghosts else None)
+            if ghost is None:
+                return "No ghost to accept on this frame"
+            _push_undo()
+            i = ghost["index"]
+            pts = coordinates.setdefault(frame_count, [])
+            while len(pts) < 49:
+                pts.append((None, None))
+            pts[i] = (float(ghost["xy"][0]), float(ghost["xy"][1]))
+            deleted_positions[frame_count].discard(i)
+            _review_sync(frame_count)
+            rest = [
+                g["index"]
+                for g in freekiki_api.review_suggestions(freekiki_session, frame_count)[
+                    "suggestions"
+                ]
+            ]
+            if rest:
+                selected_marker_idx = next((j for j in rest if j > i), rest[0])
+            return f"Accepted p{i} {freekiki_session['names'][i]} ({ghost['source']})"
+        if action == "predict":
+            ws = freekiki_options.get("workspace") if freekiki_options else None
+            if not ws:
+                return "Predict requires --freekiki-workspace"
+            model = freekiki_api.resolve_model(Path(ws), "active")
+            settings = freekiki_api.load_settings(Path(ws))["detect"]
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count)
+            ok, source = cap.read()
+            if not ok:
+                raise ValueError(f"Could not read frame {frame_count}")
+            # YOLO or heatmap checkpoint, same (box conf, xy, kp conf) contract.
+            predictor = freekiki_api.load_predictor(model, imgsz=int(settings["imgsz"]))
+            box, xy, kc = predictor.predict(source)
+            freekiki_api.apply_review_prediction(
+                freekiki_session,
+                frame_count,
+                xy,
+                kc,
+                freekiki_api.file_sha256(model),
+                kp_conf=float(settings["kp_conf"]),
+                box_conf=box,
+            )
+            row = freekiki_api.review_frame(freekiki_session, frame_count)
+            coordinates[frame_count] = [
+                tuple(p) if p is not None else (None, None) for p in row["points"]
+            ]
+            deleted_positions[frame_count].clear()
+            return f"Prediction draft: frame {frame_count}"
+        if action == "review":
+            freekiki_api.mark_reviewed(freekiki_session, frame_count)
+            freekiki_api.save_review_session(freekiki_session)
+            return f"Human reviewed: frame {frame_count}"
+        if action == "save":
+            _review_sync_all()
+            path = freekiki_api.save_review_session(freekiki_session)
+            try:
+                save_coordinates(
+                    video_path,
+                    coordinates,
+                    total_frames,
+                    deleted_positions,
+                    is_sequential=False,
+                    fixed_keypoints_count=49,
+                    coord_format="float",
+                    coord_decimals=2,
+                )
+            except Exception as e:
+                print(f"Warning: could not save coordinates CSV: {e}")
+            return f"Review session saved: {path} (F9 = save dataset)"
+        if action == "export":
+            _review_sync_all()
+            cur_default = "1" if freekiki_export_mode == "full" else "2"
+            mode_prompt = (
+                "Save dataset mode:\n\n"
+                "1 = Full (all frames: corrected + uncorrected/predicted)\n"
+                "2 = Lite (human-reviewed/corrected frames only)\n\n"
+                "Enter 1 for Full, 2 for Lite:"
+            )
+            mode_choice = show_input_dialog(mode_prompt, cur_default)
+            if mode_choice is None or not mode_choice.strip():
+                return "Save dataset cancelled"
+            mode_str = mode_choice.strip().lower()
+            if mode_str in ("1", "full", "f", "completo", "all"):
+                freekiki_export_mode = "full"
+            elif mode_str in (
+                "2",
+                "lite",
+                "l",
+                "only",
+                "only_correct",
+                "only correct",
+                "correct",
+                "c",
+                "corrigidos",
+            ):
+                freekiki_export_mode = "only_correct"
+            else:
+                return f"Save dataset cancelled: unknown mode '{mode_choice}'"
+
+            if not freekiki_session.get("dataset_folder"):
+                video = Path(freekiki_session["video"])
+                suffix = "full" if freekiki_export_mode == "full" else "corrections"
+                default = video.parent / f"freekiki_{suffix}_{video.stem}"
+                prompt_folder = f"Save {'FULL' if freekiki_export_mode == 'full' else 'LITE'} dataset in folder:"
+                answer = show_input_dialog(prompt_folder, str(default))
+                if not answer or not answer.strip():
+                    return "Save dataset cancelled"
+                freekiki_api.relocate_review_session(freekiki_session, answer.strip())
+            root = freekiki_api.export_reviewed_session(freekiki_session, mode=freekiki_export_mode)
+            with contextlib.suppress(Exception):
+                save_coordinates(
+                    video_path,
+                    coordinates,
+                    total_frames,
+                    deleted_positions,
+                    is_sequential=False,
+                    fixed_keypoints_count=49,
+                    coord_format="float",
+                    coord_decimals=2,
+                )
+            done = sum(r["state"] == "EXPORTED" for r in freekiki_session["frames"].values())
+            if freekiki_export_mode == "full":
+                n_corr = sum(
+                    r.get("point_sources", []).count("corrected") > 0
+                    or r.get("state") == "HUMAN_REVIEWED"
+                    for r in freekiki_session["frames"].values()
+                    if r.get("state") == "EXPORTED"
+                )
+                n_ai = done - n_corr
+                return (
+                    f"Full dataset saved: {done} frames "
+                    f"({n_corr} corrected, {n_ai} predicted/uncorrected) -> {root}"
+                )
+            else:
+                left = sum(
+                    r["state"] == "DRAFT_MANUAL" for r in freekiki_session["frames"].values()
+                )
+                return (
+                    f"Lite dataset saved: {done} frames ({left} incomplete left as draft) -> {root}"
+                )
+        raise ValueError(action)
+
+    def _coordinates_from_session() -> None:
+        """Show every session frame (points + hidden) in the marker grid."""
+        assert freekiki_session is not None and isinstance(coordinates, dict)
+        for frame_str, row in freekiki_session["frames"].items():
+            fi = int(frame_str)
+            coordinates[fi] = [tuple(p) if p is not None else (None, None) for p in row["points"]]
+            deleted_positions[fi] = set(row.get("hidden", []))
+
+    def _pick_freekiki_point(vx: float, vy: float, radius_px: float = 15.0) -> int | None:
+        """Nearest labelled point or ghost to a click (within ``radius_px`` on screen)."""
+        assert isinstance(coordinates, dict)
+        candidates = [
+            (i, p)
+            for i, p in enumerate(coordinates.get(frame_count, [])[:49])
+            if p is not None
+            and p[0] is not None
+            and p[1] is not None
+            and i not in deleted_positions.get(frame_count, set())
+        ]
+        candidates += [(g["index"], g["xy"]) for g in _review_hints()["suggestions"]]
+        best = min(
+            candidates,
+            key=lambda c: math.hypot(float(c[1][0]) - vx, float(c[1][1]) - vy),
+            default=None,
+        )
+        if best is None:
+            return None
+        dist = math.hypot(float(best[1][0]) - vx, float(best[1][1]) - vy) * zoom_level
+        return int(best[0]) if dist <= radius_px else None
+
+    def _resume_freekiki(path) -> str:
+        nonlocal freekiki_session
+        try:
+            from . import freekiki as fk
+        except ImportError:
+            import freekiki as fk
+        restored = fk.load_review_session(path, video_path, original_width, original_height, fps)
+        if freekiki_session is None:
+            _apply_template_mode("freekiki")
+        freekiki_session = restored
+        coordinates.clear()
+        coordinates.update({i: [] for i in range(total_frames)})
+        deleted_positions.clear()
+        deleted_positions.update({i: set() for i in range(total_frames)})
+        _coordinates_from_session()
+        _enter_correction_mode(len(restored["frames"]))
+        _refresh_restore_snapshot()
+        return f"Resumed corrections: frame {frame_count}, p{selected_marker_idx} ({path})"
+
+    def _load_freekiki_run(folder: Path) -> str:
+        """Load button on a freekiki detect output: predictions become editable drafts."""
+        nonlocal freekiki_options, selected_marker_idx, sequential_mode, one_line_mode
+        if freekiki_session is None:
+            _apply_template_mode("freekiki")  # 49 slots + session; raises if markers would be lost
+        assert freekiki_session is not None and freekiki_api is not None
+        if not (folder / "README.txt").is_file():
+            runs = freekiki_api.detect_runs(folder)
+            folder = next(
+                (run for run, video in runs if video == Path(video_path).resolve()), folder
+            )
+        readme = (folder / "README.txt").read_text(encoding="utf-8").splitlines()
+        model = next((line[7:] for line in readme if line.startswith("model: ")), "")
+        ws = freekiki_api.workspace_for_model_file(model) if model else None
+        if ws is not None:
+            freekiki_options = {**(freekiki_options or {}), "workspace": str(ws)}
+        saved = freekiki_api.find_review_session(
+            video_path, folder, (freekiki_options or {}).get("workspace")
+        )
+        if saved:
+            return _resume_freekiki(saved)
+        freekiki_session["prediction_source"] = str(folder.resolve())
+        kp_conf = float(freekiki_api.load_settings(ws)["detect"]["kp_conf"]) if ws else 0.5
+        n = freekiki_api.load_raw_review_predictions(freekiki_session, folder, kp_conf=kp_conf)
+        _coordinates_from_session()
+        freekiki_api.save_review_session(freekiki_session)
+        return _enter_correction_mode(n)
+
+    def _enter_correction_mode(n: int) -> str:
+        """INSERT + Mark mode on the first missing point; returns the how-to line."""
+        nonlocal selected_marker_idx, sequential_mode, one_line_mode, frame_count, paused
+        cursor = freekiki_session.get("cursor", {}).copy()
+        if cursor:
+            frame_count = max(0, min(total_frames - 1, int(cursor.get("frame", 0))))
+            paused = True
+        if editor_mode != "insert":
+            _toggle_editor_mode()
+        sequential_mode = one_line_mode = False
+        suspects = _review_hints()["suspects"]
+        selected_marker_idx = (
+            max(0, min(48, int(cursor.get("point", 0))))
+            if cursor
+            else (suspects[0] if suspects else 0)
+        )
+        return (
+            f"FreeKiki run: {n} frames drafted. Left-click place · right-click pick · "
+            "Del/Del Range not visible · F10 ghost · F3 frame OK · F9 save dataset"
+        )
+
+    def _freekiki_load() -> str:
+        """Tpl -> L FreeKiki Load: pick a freekiki run (or batch) folder, open its video to correct."""
+        nonlocal switch_to_video, switch_freekiki_run, running
+        try:
+            from . import freekiki as fk
+        except ImportError:
+            import freekiki as fk  # ty: ignore[unresolved-import]
+
+        start = os.path.dirname(video_path) if video_path else os.path.expanduser("~")
+        if sys.platform == "linux":
+            pick = show_file_browser(
+                start,
+                title="FreeKiki Load: open the run (or batch) folder, then Enter = use this folder",
+                extensions=[".csv", ".txt"],
+                select_dir=True,
+            )
+        else:
+            pick = None
+            try:
+                from tkinter import Tk, filedialog
+
+                root = Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                pick = filedialog.askdirectory(
+                    title="FreeKiki run or batch folder", initialdir=start
+                )
+                root.destroy()
+            except Exception:
+                pass
+        if not pick:
+            return "FreeKiki Load cancelled"
+        try:
+            runs = fk.detect_runs(pick)
+        except (OSError, ValueError) as exc:
+            return f"FreeKiki Load: {exc}"
+        if not runs:
+            return "Not a freekiki detect folder (no README.txt from detect)"
+        run, video = runs[0]
+        if len(runs) > 1:
+            menu = "  ".join(f"{i}) {v.name}" for i, (_, v) in enumerate(runs, 1))
+            answer = show_input_dialog(f"Which video? {menu}", "1")
+            if not answer or not answer.strip().isdecimal():
+                return "FreeKiki Load cancelled"
+            k = int(answer.strip())
+            if not 1 <= k <= len(runs):
+                return f"Choose 1..{len(runs)}"
+            run, video = runs[k - 1]
+        print(
+            f">> vaila/getpixelvideo: uv run --no-sync vaila/getpixelvideo.py --freekiki-run {shlex.quote(str(run))}"
+        )
+        if video_path and Path(video_path).resolve() == video:
+            try:
+                return _load_freekiki_run(run)
+            except (OSError, ValueError, KeyError) as exc:
+                return f"FreeKiki run not loaded: {exc}"
+        if freekiki_session is not None:
+            _review_sync_all()
+            freekiki_api.save_review_session(freekiki_session)
+        switch_to_video, switch_freekiki_run, running = str(video), str(run), False
+        return f"Opening {video.name} for correction..."
+
+    review_hints_memo: dict = {"key": None, "hints": None}
+    # Discarded review frames (X) are hidden from navigation; Shift+X shows them again.
+    review_nav: dict = {"show_discarded": False, "last_frame": frame_count}
+
+    def _is_discarded(fi: int) -> bool:
+        if freekiki_session is None:
+            return False
+        return freekiki_session["frames"].get(str(fi), {}).get("state") == "DISCARDED"
+
+    def _skip_discarded(prev: int, cur: int) -> int:
+        """First non-discarded frame from ``cur`` in the direction of travel."""
+        if review_nav["show_discarded"] or not _is_discarded(cur):
+            return cur
+        for step in ((1 if cur >= prev else -1), (-1 if cur >= prev else 1)):
+            fi = cur
+            while 0 <= fi < total_frames and _is_discarded(fi):
+                fi += step
+            if 0 <= fi < total_frames:
+                return fi
+        return cur  # every frame is discarded
+
+    def _review_hints() -> dict:
+        """Ghosts + completeness of the current frame, recomputed when its markers change."""
+        empty = {"status": "", "suspects": [], "suggestions": []}
+        if freekiki_session is None or not isinstance(coordinates, dict):
+            return empty
+        key = (
+            frame_count,
+            tuple(coordinates.get(frame_count, [])),
+            frozenset(deleted_positions.get(frame_count, ())),
+        )
+        if review_hints_memo["key"] != key:
+            try:
+                _review_sync(frame_count)
+                hints = freekiki_api.review_suggestions(freekiki_session, frame_count)
+            except (ValueError, OSError) as exc:
+                print(f"Warning: FreeKiki hints failed for frame {frame_count}: {exc}")
+                hints = empty
+            review_hints_memo.update(key=key, hints=hints)
+        return review_hints_memo["hints"]
+
+    def _review_point_status(row: dict | None, index: int) -> str:
+        if row is None:
+            return "absent"
+        if index in row.get("hidden", []):
+            return "hidden"
+        source = row["point_sources"][index]
+        if source in ("predicted", "manual") and row["state"] in ("HUMAN_REVIEWED", "EXPORTED"):
+            return "accepted"
+        return source
+
+    if freekiki_session is not None:
+        if (
+            freekiki_options
+            and freekiki_options.get("predictions")
+            and not freekiki_session["frames"]
+        ):
+            save_message_text = _load_freekiki_run(Path(freekiki_options["predictions"]))
+        else:
+            save_message_text = _enter_correction_mode(len(freekiki_session["frames"]))
+        showing_save_message = True
+        save_message_timer = 300
+
     last_valid_frame = None
     slow_mo_accumulator = 0.0
     hover_pixel_xy: tuple[float, float] | None = None
@@ -11021,9 +12209,14 @@ def play_video_with_controls(
         if track_ai_active and ret and frame is not None:
             _perform_live_ai_tracking(frame_count, frame)
 
-        # Apply zoom
-        zoomed_width = int(original_width * zoom_level)
-        zoomed_height = int(original_height * zoom_level)
+        # Fit frame into the session canvas without stretching (mixed-size
+        # still sequences / wrong CAP_PROP dims), then apply zoom.
+        canvas_w = max(1, int(original_width))
+        canvas_h = max(1, int(original_height))
+        if frame.shape[1] != canvas_w or frame.shape[0] != canvas_h:
+            frame = letterbox_frame_to_canvas(frame, canvas_w, canvas_h)
+        zoomed_width = int(canvas_w * zoom_level)
+        zoomed_height = int(canvas_h * zoom_level)
         zoomed_frame = cv2.resize(frame, (zoomed_width, zoomed_height))
         crop_x = int(max(0, min(zoomed_width - window_width, offset_x)))
         crop_y = int(max(0, min(zoomed_height - window_height, offset_y)))
@@ -11384,7 +12577,22 @@ def play_video_with_controls(
                 # Inactive markers stay r=3; active slot uses a tighter core so the
                 # click target (and image under it) remains readable.
                 _core_r = 2 if i == selected_marker_idx else 3
-                pygame.draw.circle(screen, (0, 255, 0), (screen_x, screen_y), _core_r)
+                _current_review = (
+                    freekiki_session["frames"].get(str(frame_count))
+                    if freekiki_session is not None
+                    else None
+                )
+                _predicted = (
+                    _current_review is not None
+                    and i < 49
+                    and _current_review["point_sources"][i] == "predicted"
+                )
+                if _predicted:
+                    pygame.draw.rect(
+                        screen, (255, 210, 40), pygame.Rect(screen_x - 4, screen_y - 4, 8, 8), 2
+                    )
+                else:
+                    pygame.draw.circle(screen, (0, 255, 0), (screen_x, screen_y), _core_r)
                 if template_mode != "free":
                     display_idx = int(fifa_start_keypoint) + i + int(fifa_index_base)
                 else:
@@ -11504,13 +12712,13 @@ def play_video_with_controls(
             if drawing_box and current_box_rect is not None:
                 pygame.draw.rect(screen, (255, 0, 0), current_box_rect, 2)
 
-        # Draw Quick Measure clicked points (persists even after the mode is
-        # toggled off, so the last measurement stays visible on screen).
+        # Draw Quick Measure geometry. Completed results honour the MEASURE
+        # checkbox; drafts / active mode banner stay visible while measuring.
         if quickmeasure_session is not None and (
-            quickmeasure_session.results
+            (show_measure_overlay and quickmeasure_session.results)
             or quickmeasure_session.draft_points
             or quickmeasure_session.active_mode is not None
-            or quickmeasure_session.points
+            or (show_measure_overlay and quickmeasure_session.points)
         ):
             quickmeasure.draw_quickmeasure_overlay(
                 screen,
@@ -11521,10 +12729,14 @@ def play_video_with_controls(
                 font,
                 pad_x=pad_x,
                 pad_y=pad_y,
+                show_results=show_measure_overlay,
             )
 
         # Calibration-first overlay: clicked calibration points + next step.
         if calib_mode and quick_measure_calibrating and quickmeasure_draft is not None:
+            calib_cursor = pygame.mouse.get_pos()
+            if calib_cursor[1] >= window_height:
+                calib_cursor = None
             quickmeasure.draw_calibration_overlay(
                 screen,
                 quickmeasure_draft,
@@ -11534,6 +12746,7 @@ def play_video_with_controls(
                 font,
                 pad_x=pad_x,
                 pad_y=pad_y,
+                cursor_pos=calib_cursor,
             )
 
         _mx_scr, _my_scr = pygame.mouse.get_pos()
@@ -11566,6 +12779,7 @@ def play_video_with_controls(
             labeling_button_rect,  # Add labeling button to return
             calib_button_rect,  # CALIB (Shift+Q)
             measure_button_rect,  # MEASURE (Q)
+            measure_overlay_toggle_rect,  # Show/hide measure value overlays
             fps_button_rect,  # Manual video FPS in Hz (same as I)
             guide_button_rect,  # Guide button (field/skeleton)
             guide_toggle_rect,  # Guide on/off indicator
@@ -11576,11 +12790,10 @@ def play_video_with_controls(
             track_deep_button_rect,  # Deep checkbox (option for AI Track)
             track_shape_button_rect,  # Track AI Shape selector (Point/Circle/Box)
             track_cfg_button_rect,  # Track AI TOML configuration dialog
+            track_weights_button_rect,  # Track AI Model weights (.pt/.pth) selector
             editor_mode_button_rect,  # VISUAL / INSERT (Ctrl+I)
             restore_button_rect,  # Restore to last Save / open
-            export_video_button_rect,  # Add export video button to return
             rename_markers_button_rect,  # Rename p0/p1… → COCO/custom
-            save_dataset_button_rect,  # Export PNG ML dataset + all_labels
             help_web_button_rect,  # Add help web button to return
             dataset_button_rect,  # Load dataset folder (multi-video)
             goto_marker_button_rect,  # Jump to marker index
@@ -11610,8 +12823,19 @@ def play_video_with_controls(
                 )
                 msg_bg.set_alpha(200)
                 msg_bg.fill((0, 100, 0))
-                screen.blit(msg_bg, (window_width // 2 - msg_bg.get_width() // 2, 10))
-                screen.blit(msg_surface, (window_width // 2 - msg_surface.get_width() // 2, 15))
+                message_y = (
+                    86
+                    if calib_mode and quick_measure_calibrating and quickmeasure_draft is not None
+                    else 10
+                )
+                screen.blit(
+                    msg_bg,
+                    (window_width // 2 - msg_bg.get_width() // 2, message_y),
+                )
+                screen.blit(
+                    msg_surface,
+                    (window_width // 2 - msg_surface.get_width() // 2, message_y + 5),
+                )
 
         # ---------------------------------------------------------------
         # Guide panel + upper-right reference map (visual only).
@@ -11624,7 +12848,7 @@ def play_video_with_controls(
             _reference_surface = None
             _rw = _rh = 0
             if pitch_guide_show_reference:
-                if template_mode == "fifa" and pitch_guide_points:
+                if template_mode in ("fifa", "freekiki") and pitch_guide_points:
                     if pitch_guide_fifa_mode:
                         _reference_surface = _pitch_guide_reference_surface_fifa(_ov)
                     else:
@@ -11646,7 +12870,7 @@ def play_video_with_controls(
             _panel.set_alpha(142)
             _panel.fill((20, 55, 20))
 
-            if template_mode == "fifa" and pitch_guide_points:
+            if template_mode in ("fifa", "freekiki") and pitch_guide_points:
                 _total_pts = len(pitch_guide_points)
                 _ov = selected_marker_idx if 0 <= selected_marker_idx < _total_pts else 0
                 _pt = pitch_guide_points[_ov]
@@ -11677,6 +12901,116 @@ def play_video_with_controls(
             if _reference_surface is not None and _rw > 0:
                 screen.blit(_reference_surface, (window_width - _rw - 10, 10))
 
+        freekiki_buttons = {}
+        if freekiki_session is not None:
+            hints = _review_hints()
+            if _is_discarded(frame_count):
+                blit_translucent(
+                    screen, pygame.Rect(0, 0, window_width, window_height), (0, 0, 0), 190
+                )
+                big = pygame.font.SysFont("verdana", 34, bold=True)
+                msg = big.render("DISCARDED - not in the dataset", True, (255, 80, 80))
+                screen.blit(msg, msg.get_rect(center=(window_width // 2, window_height // 2 - 20)))
+                tip = pygame.font.SysFont("verdana", 16).render(
+                    "X restores this frame  ·  Shift+X hides discarded frames again",
+                    True,
+                    (230, 230, 230),
+                )
+                screen.blit(tip, tip.get_rect(center=(window_width // 2, window_height // 2 + 22)))
+            small = pygame.font.SysFont("verdana", 11)
+            # Ghosts of missing points: circle = AI below kp_conf, cross = field homography.
+            for ghost in hints["suggestions"]:
+                gx, gy = video_to_screen_coords(
+                    *ghost["xy"],
+                    zoom_level=zoom_level,
+                    crop_x=crop_x,
+                    crop_y=crop_y,
+                    pad_x=pad_x,
+                    pad_y=pad_y,
+                )
+                width = 3 if ghost["index"] == selected_marker_idx else 1
+                if ghost["source"] == "geometry":
+                    color = (255, 120, 220)
+                    pygame.draw.line(screen, color, (gx - 9, gy), (gx + 9, gy), width)
+                    pygame.draw.line(screen, color, (gx, gy - 9), (gx, gy + 9), width)
+                else:
+                    color = (90, 220, 255)
+                    pygame.draw.circle(screen, color, (gx, gy), 9, width)
+                text = f"{ghost['index']}?"
+                if ghost["conf"] is not None:
+                    text += f" {ghost['conf']:.2f}"
+                screen.blit(small.render(text, True, color), (gx + 10, gy - 16))
+            review = freekiki_session["frames"].get(str(frame_count))
+
+            panel = pygame.Rect(10, max(0, window_height - 106), min(window_width - 20, 605), 100)
+            blit_translucent(screen, panel, (22, 34, 42), FREEKIKI_PANEL_ALPHA)
+            pygame.draw.rect(screen, (220, 220, 220), panel, 1)
+            point_i = max(0, min(48, selected_marker_idx))
+            source = _review_point_status(review, point_i)
+            state_text = (
+                f"Kiki49 frame {frame_count} [{review['state'] if review else 'UNLABELED'}]  "
+                f"{point_i:02d} {freekiki_session['names'][point_i]}: {source}"
+            )
+            label = pygame.font.SysFont("verdana", 12).render(
+                state_text[:78], True, (255, 255, 255)
+            )
+            screen.blit(label, (panel.x + 7, panel.y + 6))
+            if hints["suspects"]:
+                missing = "missing: " + " ".join(f"p{i}" for i in hints["suspects"])
+                missing += "  (F10 accept ghost, Del hide)"
+                missing_color = (255, 170, 90)
+            elif hints["status"] == "complete":
+                missing, missing_color = "complete: every visible point labelled", (140, 230, 140)
+            elif hints["status"]:
+                missing = f"not verifiable ({hints['status']}): label >= 4 spread pitch points"
+                missing_color = (255, 170, 90)
+            else:
+                missing, missing_color = "", (255, 255, 255)
+            screen.blit(
+                small.render(missing[:100], True, missing_color), (panel.x + 7, panel.y + 22)
+            )
+            hint = "Left-click place · Right-click pick · Del / Del Range = not visible"
+            screen.blit(small.render(hint, True, (200, 210, 220)), (panel.x + 7, panel.y + 38))
+            list_y = max(4, panel.y - 160)
+            list_rect = pygame.Rect(10, list_y, min(window_width - 20, 360), 154)
+            blit_translucent(screen, list_rect, (22, 34, 42), FREEKIKI_PANEL_ALPHA)
+            pygame.draw.rect(screen, (180, 180, 180), list_rect, 1)
+            first = max(0, min(42, point_i - 3))
+            for index in range(first, first + 7):
+                status = _review_point_status(review, index)
+                line = f"{index:02d} {freekiki_session['names'][index]} — {status}"
+                color = (255, 230, 120) if index == point_i else (235, 235, 235)
+                screen.blit(
+                    small.render(line[:52], True, color),
+                    (list_rect.x + 7, list_rect.y + 5 + (index - first) * 20),
+                )
+            btn_font = pygame.font.SysFont("verdana", 10)
+            btn_w = 94
+            btn_h = 30
+            btn_gap = 5
+            for n, (action, caption) in enumerate(
+                (
+                    ("load", "Load run"),
+                    ("review", "Frame OK (F3)"),
+                    ("accept", "Ghost (F10)"),
+                    ("next", "Next (PgDn)"),
+                    ("discard", "Discard (X)"),
+                    ("export", "Save (F9)"),
+                )
+            ):
+                rect = pygame.Rect(panel.x + 6 + n * (btn_w + btn_gap), panel.y + 56, btn_w, btn_h)
+                freekiki_buttons[action] = rect
+                if action == "load":
+                    btn_color = (30, 110, 60)
+                elif action == "export":
+                    btn_color = (35, 125, 95)
+                elif action == "discard":
+                    btn_color = (140, 50, 50)
+                else:
+                    btn_color = (50, 95, 115)
+                blit_translucent(screen, rect, btn_color, 210)
+                txt = btn_font.render(caption, True, (255, 255, 255))
+                screen.blit(txt, txt.get_rect(center=rect.center))
         pygame.display.flip()
 
         # Auto-marking logic - mark points automatically during playback
@@ -11703,6 +13037,7 @@ def play_video_with_controls(
                     if selected_marker_idx in deleted_positions[frame_count]:
                         deleted_positions[frame_count].remove(selected_marker_idx)
 
+        _review_before_events = frame_count
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -11718,7 +13053,76 @@ def play_video_with_controls(
                     pygame.display.set_caption(GETPIXELVIDEO_WINDOW_TITLE)
 
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+                if (
+                    freekiki_session is not None
+                    and event.key == pygame.K_x
+                    and pygame.key.get_mods() & pygame.KMOD_SHIFT
+                ):
+                    review_nav["show_discarded"] = not review_nav["show_discarded"]
+                    n_disc = sum(
+                        r["state"] == "DISCARDED" for r in freekiki_session["frames"].values()
+                    )
+                    save_message_text = (
+                        f"Showing {n_disc} discarded frames (X restores one)"
+                        if review_nav["show_discarded"]
+                        else f"{n_disc} discarded frames hidden from navigation"
+                    )
+                    showing_save_message = True
+                    save_message_timer = 120
+                elif freekiki_session is not None and event.key in (
+                    pygame.K_F2,
+                    pygame.K_F3,
+                    pygame.K_F4,
+                    pygame.K_F9,
+                    pygame.K_F10,
+                    pygame.K_x,
+                ):
+                    action = {
+                        pygame.K_F2: "predict",
+                        pygame.K_F3: "review",
+                        pygame.K_F4: "save",
+                        pygame.K_F9: "export",
+                        pygame.K_F10: "accept",
+                        pygame.K_x: "discard",
+                    }[event.key]
+                    try:
+                        save_message_text = _review_action(action)
+                    except (OSError, ValueError, RuntimeError) as exc:
+                        save_message_text = f"FreeKiki: {exc}"
+                    showing_save_message = True
+                    save_message_timer = 180
+                elif (
+                    freekiki_session is not None
+                    and event.key == pygame.K_f
+                    and (pygame.key.get_mods() & pygame.KMOD_CTRL)
+                ):
+                    answer = show_input_dialog("Go to frame index (0-based):", str(frame_count))
+                    if answer and answer.isdecimal() and int(answer) < total_frames:
+                        frame_count = int(answer)
+                        paused = True
+                elif freekiki_session is not None and event.key in (
+                    pygame.K_PAGEUP,
+                    pygame.K_PAGEDOWN,
+                ):
+                    pending = sorted(
+                        int(f)
+                        for f, row in freekiki_session["frames"].items()
+                        if row["state"] in ("AI_DRAFT", "DRAFT_MANUAL")
+                    )
+                    if pending:
+                        if event.key == pygame.K_PAGEDOWN:
+                            frame_count = next((f for f in pending if f > frame_count), pending[0])
+                        else:
+                            frame_count = next(
+                                (f for f in reversed(pending) if f < frame_count), pending[-1]
+                            )
+                        paused = True
+                elif event.key == pygame.K_ESCAPE:
+                    if freekiki_session is not None:
+                        _review_sync(frame_count)
+                        freekiki_api.save_review_session(freekiki_session)
+                        running = False
+                        continue
                     if labeling_mode and bboxes:
                         # Export labeling dataset
                         dataset_dir, message = export_labeling_dataset(
@@ -11742,33 +13146,16 @@ def play_video_with_controls(
                         showing_save_message = True
                         save_message_timer = 90  # Show for about 3 seconds at 30fps
                     else:
-                        output_file = save_coordinates(
-                            video_path,
-                            coordinates,
-                            total_frames,
-                            deleted_positions,
-                            is_sequential=sequential_mode,
-                            fixed_keypoints_count=(
-                                fifa_fixed_keypoints if pitch_guide_fifa_mode else None
-                            ),
-                            keypoint_start_idx=(
-                                fifa_start_keypoint if pitch_guide_fifa_mode else 0
-                            ),
-                            keypoint_index_base=(fifa_index_base if pitch_guide_fifa_mode else 0),
-                            coord_format=coord_format,
-                            coord_decimals=coord_decimals,
-                        )
-                        # Save Swap Config if available
+                        output_file, detail = _save_markers_csv_smart()
                         if active_swap_rules:
-                            base_dir = os.path.dirname(video_path)
-                            base_filename = os.path.splitext(os.path.basename(video_path))[0]
-                            swap_file = os.path.join(base_dir, f"{base_filename}_swap.toml")
+                            out_dir, base_filename = _media_out_dir_and_stem()
+                            swap_file = os.path.join(out_dir, f"{base_filename}_swap.toml")
                             save_swap_toml(swap_file, active_swap_rules)
 
-                        saved = True
-                        save_message_text = f"Saved to: {os.path.basename(output_file)}"
+                        saved = output_file is not None or "Quick Measure" in detail
+                        save_message_text = f"Saved: {detail}"
                         showing_save_message = True
-                        save_message_timer = 90  # Show for about 3 seconds at 30fps
+                        save_message_timer = 120
                     running = False
                 elif event.key == pygame.K_SPACE:
                     paused = not paused
@@ -12014,13 +13401,14 @@ def play_video_with_controls(
                     and measure_mode
                     and quickmeasure_session is not None
                 ):
+                    _qm_save_dir, _qm_save_stem = _media_out_dir_and_stem()
                     save_message_text = quickmeasure.show_quickmeasure_menu(
                         screen,
                         quickmeasure_session,
                         window_width,
                         window_height,
-                        save_dir=os.path.dirname(video_path) or os.getcwd(),
-                        save_stem=os.path.basename(video_path or "quickmeasure"),
+                        save_dir=_qm_save_dir,
+                        save_stem=_qm_save_stem,
                     )
                     if quickmeasure_session.pending_ref3d_draft is not None:
                         quickmeasure_draft = quickmeasure_session.pending_ref3d_draft
@@ -12039,6 +13427,16 @@ def play_video_with_controls(
                     save_message_text = "Measure: points and results cleared"
                     showing_save_message = True
                     save_message_timer = 30
+                elif event.key == pygame.K_DELETE and freekiki_session is not None:
+                    if _require_insert() and 0 <= selected_marker_idx < 49:
+                        _push_undo()
+                        deleted_positions.setdefault(frame_count, set()).add(selected_marker_idx)
+                        _review_sync(frame_count)
+                        save_message_text = (
+                            f"p{selected_marker_idx}: not visible in frame {frame_count}"
+                        )
+                        showing_save_message = True
+                        save_message_timer = 60
                 elif event.key == pygame.K_d:
                     # Delete all markers
                     if not _require_insert():
@@ -12123,15 +13521,16 @@ def play_video_with_controls(
                     # Load dataset folder (next Save will append to it; multi-video)
                     load_dataset_folder()
                 elif event.key == pygame.K_F8:
-                    # Open another video (keep dataset if set; no need to close app)
+                    # Open another video or still image (keep dataset if set)
                     start_dir = (
                         os.path.dirname(video_path) if video_path else os.path.expanduser("~")
                     )
+                    still_exts = sorted(STILL_IMAGE_EXTENSIONS)
                     if sys.platform == "linux":
                         new_path = show_file_browser(
                             start_dir,
-                            title="Select another video",
-                            extensions=[".mp4", ".avi", ".mkv", ".mov", ".webm"],
+                            title="Select another video or still image",
+                            extensions=[".mp4", ".avi", ".mkv", ".mov", ".webm", *still_exts],
                         )
                     else:
                         new_path = None
@@ -12141,11 +13540,13 @@ def play_video_with_controls(
                             root = Tk()
                             root.withdraw()
                             root.attributes("-topmost", True)
+                            still_globs = _still_image_dialog_globs()
                             new_path = filedialog.askopenfilename(
-                                title="Select another video",
+                                title="Select another video or still image",
                                 initialdir=start_dir,
                                 filetypes=[
                                     ("Video", "*.mp4 *.avi *.mkv *.mov *.webm"),
+                                    ("Still image", still_globs),
                                     ("All files", "*.*"),
                                 ],
                             )
@@ -12175,7 +13576,9 @@ def play_video_with_controls(
                         save_message_timer = 90
                     else:
                         chosen = _cycle_template_mode()
-                        if chosen is None:
+                        if chosen == "error":
+                            pass
+                        elif chosen is None:
                             save_message_text = "Template: cancelled"
                         else:
                             _tpl = _TEMPLATE_LABELS.get(template_mode, template_mode)
@@ -12187,7 +13590,7 @@ def play_video_with_controls(
                                 _n = int(fifa_fixed_keypoints) if fifa_fixed_keypoints else 0
                                 save_message_text = f"Template: {_tpl} — fixed slots N={_n}"
                         showing_save_message = True
-                        save_message_timer = 45
+                        save_message_timer = 180 if chosen == "error" else 45
                 elif event.key == pygame.K_TAB:
                     if marker_selection_locked:
                         save_message_text = (
@@ -12513,10 +13916,11 @@ def play_video_with_controls(
                     showing_save_message = True
                     save_message_timer = 30
 
-                # Track AI Backbone Weights Hotkey (Ctrl+W or Alt+W)
-                elif event.key == pygame.K_w and (
-                    pygame.key.get_mods() & (pygame.KMOD_CTRL | pygame.KMOD_ALT)
-                ):
+                # Track AI Backbone Weights Hotkey (Ctrl+W, Alt+W, or Ctrl+M)
+                elif (
+                    event.key == pygame.K_w
+                    and (pygame.key.get_mods() & (pygame.KMOD_CTRL | pygame.KMOD_ALT))
+                ) or (event.key == pygame.K_m and (pygame.key.get_mods() & pygame.KMOD_CTRL)):
                     select_track_ai_weights()
 
                 # Swap Hotkey (W) and Load Config (Shift+W)
@@ -12609,10 +14013,14 @@ def play_video_with_controls(
                     )
                     pygame.display.set_caption(GETPIXELVIDEO_WINDOW_TITLE)
 
-                # Add sequential mode toggle with 'o' key
+                # Save & Export Hub hotkey (Ctrl+S)
+                elif event.key == pygame.K_s and (pygame.key.get_mods() & pygame.KMOD_CTRL):
+                    show_save_menu_dialog()
+
+                # Add sequential mode toggle with 'o' key or bare 's' key (without Ctrl)
                 elif (
                     event.key == pygame.K_o or event.key == pygame.K_s
-                ):  # Toggle sequential mode with 'o' key
+                ):  # Toggle sequential mode with 'o' key or bare 's' key
                     if not one_line_mode:  # Only toggle if not in one-line mode
                         sequential_mode = not sequential_mode
                         save_message_text = (
@@ -12636,6 +14044,24 @@ def play_video_with_controls(
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 x, y = event.pos
                 # Toolbar / control panel: primary (left) button only — ignore
+                if freekiki_session is not None and event.button in (1, 3):
+                    if event.button == 1 and any(
+                        rect.collidepoint(x, y) for rect in freekiki_buttons.values()
+                    ):
+                        action = next(
+                            name
+                            for name, rect in freekiki_buttons.items()
+                            if rect.collidepoint(x, y)
+                        )
+                        try:
+                            save_message_text = _review_action(action)
+                        except (OSError, ValueError, RuntimeError) as exc:
+                            save_message_text = f"FreeKiki: {exc}"
+                        showing_save_message = True
+                        save_message_timer = 180
+                        continue
+                    elif any(rect.collidepoint(x, y) for rect in freekiki_buttons.values()):
+                        continue
                 # middle, right, and extra buttons so they cannot fire UI actions.
                 if y >= window_height and event.button != 1:
                     pass
@@ -12660,7 +14086,9 @@ def play_video_with_controls(
                             save_message_timer = 90
                         else:
                             chosen = _cycle_template_mode()
-                            if chosen is None:
+                            if chosen == "error":
+                                pass
+                            elif chosen is None:
                                 save_message_text = "Template: cancelled"
                             else:
                                 _tpl = _TEMPLATE_LABELS.get(template_mode, template_mode)
@@ -12674,7 +14102,7 @@ def play_video_with_controls(
                                     _n = int(fifa_fixed_keypoints) if fifa_fixed_keypoints else 0
                                     save_message_text = f"Template: {_tpl} — fixed slots N={_n}"
                             showing_save_message = True
-                            save_message_timer = 45
+                            save_message_timer = 180 if chosen == "error" else 45
                     elif marker_mode_button_rect.collidepoint(x, rel_y):
                         if labeling_mode:
                             save_message_text = (
@@ -12682,18 +14110,29 @@ def play_video_with_controls(
                             )
                             showing_save_message = True
                             save_message_timer = 90
+                        elif freekiki_session is not None:
+                            sequential_mode = not sequential_mode
+                            one_line_mode = False
+                            save_message_text = (
+                                f"Mode: {'Seq' if sequential_mode else 'Mark'} (FreeKiki 49)"
+                            )
+                            showing_save_message = True
+                            save_message_timer = 45
                         else:
                             if one_line_mode:
                                 one_line_mode = False
                                 sequential_mode = False
                                 save_message_text = "Mode: Mark"
                             elif sequential_mode:
-                                sequential_mode = False
-                                one_line_mode = True
-                                selected_marker_idx = -1
-                                if template_mode != "free":
-                                    _apply_template_mode("free")
-                                save_message_text = "Mode: 1-line (Template free)"
+                                try:
+                                    if template_mode != "free":
+                                        _apply_template_mode("free")
+                                    sequential_mode = False
+                                    one_line_mode = True
+                                    selected_marker_idx = -1
+                                    save_message_text = "Mode: 1-line (Template free)"
+                                except ValueError as exc:
+                                    save_message_text = str(exc)
                             else:
                                 sequential_mode = True
                                 save_message_text = "Mode: Seq"
@@ -12704,96 +14143,7 @@ def play_video_with_controls(
                     elif help_button_rect.collidepoint(x, rel_y):
                         show_help_dialog()
                     elif save_button_rect.collidepoint(x, rel_y):
-                        if labeling_mode and bboxes:
-                            # New Unified Save Logic
-                            save_labeling_project()
-                            _refresh_restore_snapshot()
-                            undo_stack.clear()
-                            showing_save_message = True
-                            save_message_timer = 60
-                        elif csv_loaded and tracking_data and not bbox_converted_to_markers:
-                            # Show "Saving..." immediately so the user knows
-                            # the dataset export (frame extraction + label
-                            # writing) is in progress, not hung.
-                            save_message_text = (
-                                f"Saving YOLO dataset from {len(tracking_data)} "
-                                "annotated frames - this can take minutes..."
-                            )
-                            showing_save_message = True
-                            save_message_timer = 240
-                            _flush_save_message(screen, save_message_text)
-                            export_boxes = normalize_bboxes_for_labeling(
-                                tracking_data, label_fallback=current_label or "object"
-                            )
-                            dataset_dir, message = export_labeling_dataset(
-                                video_path,
-                                export_boxes,
-                                total_frames,
-                                original_width,
-                                original_height,
-                                output_dataset_dir=current_dataset_dir,
-                            )
-                            if dataset_dir:
-                                saved = True
-                                _refresh_restore_snapshot()
-                                undo_stack.clear()
-                                save_message_text = (
-                                    f"BBox dataset saved: {os.path.basename(dataset_dir)}"
-                                    + (" (appended)" if current_dataset_dir else "")
-                                )
-                            else:
-                                save_message_text = f"BBox export failed: {message}"
-                            showing_save_message = True
-                            save_message_timer = 120
-                        elif one_line_mode:
-                            output_file = save_1_line_coordinates(
-                                video_path, one_line_markers, deleted_markers
-                            )
-                            saved = True
-                            _refresh_restore_snapshot()
-                            undo_stack.clear()
-                            save_message_text = f"Saved to: {os.path.basename(output_file)}"
-                            showing_save_message = True
-                            save_message_timer = 90  # Show for about 3 seconds at 30fps
-                        else:
-                            # On long videos with many slots (e.g. SAM3 bbox
-                            # converted to markers across 60+ obj_ids and
-                            # 15000+ frames) the marker CSV write can take a
-                            # few seconds. Show "Saving..." so the user does
-                            # not assume the GUI is frozen and kill the
-                            # process.
-                            save_message_text = (
-                                f"Saving markers ({len(coordinates)} frames"
-                                f" x {max((len(p) for p in coordinates.values()), default=0)} "
-                                "slots)..."
-                            )
-                            showing_save_message = True
-                            save_message_timer = 240
-                            _flush_save_message(screen, save_message_text)
-                            output_file = save_coordinates(
-                                video_path,
-                                coordinates,
-                                total_frames,
-                                deleted_positions,
-                                is_sequential=sequential_mode,
-                                fixed_keypoints_count=(
-                                    fifa_fixed_keypoints if template_mode != "free" else None
-                                ),
-                                keypoint_start_idx=(
-                                    fifa_start_keypoint if template_mode != "free" else 0
-                                ),
-                                keypoint_index_base=(
-                                    fifa_index_base if template_mode != "free" else 0
-                                ),
-                                coord_format=coord_format,
-                                coord_decimals=coord_decimals,
-                            )
-                            saved = True
-                            _refresh_restore_snapshot()
-                            undo_stack.clear()
-                            save_message_text = f"Saved to: {os.path.basename(output_file)}"
-                            showing_save_message = True
-                            save_message_timer = 90  # Show for about 3 seconds at 30fps
+                        show_save_menu_dialog()
                     elif persist_button_rect.collidepoint(x, rel_y):
                         # Remove persistence settings dialog
                         persistence_enabled = not persistence_enabled
@@ -12844,6 +14194,15 @@ def play_video_with_controls(
                         save_message_timer = 90
                     elif measure_button_rect.collidepoint(x, rel_y):
                         save_message_text = _toggle_measure_mode()
+                        showing_save_message = True
+                        save_message_timer = 90
+                    elif measure_overlay_toggle_rect.collidepoint(x, rel_y):
+                        show_measure_overlay = not show_measure_overlay
+                        save_message_text = (
+                            "Measure overlay ON — values drawn on image"
+                            if show_measure_overlay
+                            else "Measure overlay OFF — values hidden"
+                        )
                         showing_save_message = True
                         save_message_timer = 90
                     elif fps_button_rect.collidepoint(x, rel_y):
@@ -12921,6 +14280,8 @@ def play_video_with_controls(
                         save_message_timer = 60
                     elif track_cfg_button_rect.collidepoint(x, rel_y):
                         _handle_track_ai_toml_dialog()
+                    elif track_weights_button_rect.collidepoint(x, rel_y):
+                        choose_track_ai_weights()
                     elif show_tracking_indicator_rect.collidepoint(x, rel_y):
                         # Toggle show tracking
                         show_tracking = not show_tracking
@@ -12929,17 +14290,11 @@ def play_video_with_controls(
                         )
                         showing_save_message = True
                         save_message_timer = 60
-                    elif export_video_button_rect.collidepoint(x, rel_y):
-                        # Export video with annotations
-                        export_video_with_annotations()
                     elif rename_markers_button_rect.collidepoint(x, rel_y):
                         ok_rn, msg_rn = rename_marker_slots_dialog()
                         save_message_text = msg_rn
                         showing_save_message = True
                         save_message_timer = 120 if ok_rn else 60
-                    elif save_dataset_button_rect.collidepoint(x, rel_y):
-                        # Export PNG ML dataset and all_labels helper folder
-                        save_split_dataset_with_all_labels()
                     elif dataset_button_rect.collidepoint(x, rel_y):
                         # Load dataset folder (next Save appends; multi-video). Same as F7.
                         load_dataset_folder()
@@ -13050,10 +14405,7 @@ def play_video_with_controls(
                             except quickmeasure.QuickMeasureError as exc:
                                 save_message_text = f"Calibration: {exc}"
                             else:
-                                if quickmeasure_draft.is_complete:
-                                    save_message_text = _finish_quickmeasure_calibration()
-                                else:
-                                    save_message_text = quickmeasure_draft.instructions()
+                                save_message_text = quickmeasure_draft.instructions()
                             showing_save_message = True
                             save_message_timer = 90
                         elif event.button == 3:  # Right click: undo calibration point
@@ -13334,6 +14686,23 @@ def play_video_with_controls(
 
                                 frame_count = min(frame_count + 1, total_frames - 1)
                                 paused = True
+
+                    elif event.button == 3 and freekiki_session is not None and not one_line_mode:
+                        # FreeKiki correction: right-click picks the nearest point or ghost,
+                        # so the next left-click moves it (Del hides it).
+                        picked = _pick_freekiki_point(video_x, video_y)
+                        if picked is None:
+                            save_message_text = (
+                                "Right-click on a point to select it (Del = not visible)"
+                            )
+                        else:
+                            selected_marker_idx = picked
+                            save_message_text = (
+                                f"Selected p{picked} {freekiki_session['names'][picked]}: "
+                                "left-click to place it"
+                            )
+                        showing_save_message = True
+                        save_message_timer = 60
 
                     elif event.button == 3:  # Right click
                         # Remove currently selected marker (not the last one).
@@ -13727,6 +15096,8 @@ def play_video_with_controls(
                 save_message_timer = 30
 
         # Hold-to-repeat arrow navigation (paused only)
+        if freekiki_session is not None:
+            _review_sync(_review_before_events)
         if paused and _nav_hold_key is not None:
             pressed = pygame.key.get_pressed()
             if not pressed[_nav_hold_key]:
@@ -13754,6 +15125,10 @@ def play_video_with_controls(
                                 last_valid_frame = frame_nav
                                 _perform_live_ai_tracking(frame_count, frame_nav)
 
+        if freekiki_session is not None and frame_count != review_nav["last_frame"]:
+            frame_count = _skip_discarded(review_nav["last_frame"], frame_count)
+        review_nav["last_frame"] = frame_count
+
         if paused:
             # Se pausado, não limitamos a taxa de FPS para que a interface seja responsiva
             clock.tick(60)  # Taxa de atualização da interface
@@ -13762,12 +15137,36 @@ def play_video_with_controls(
             clock.tick(fps)
 
     if switch_to_video:
+        if freekiki_session is not None:
+            freekiki_api.save_review_session(freekiki_session)
         cap.release()
         # Do not pygame.quit() so run_getpixelvideo can reopen with new video
-        return ("switch_video", switch_to_video, current_dataset_dir, labeling_mode)
+        return (
+            "switch_video",
+            switch_to_video,
+            current_dataset_dir,
+            labeling_mode,
+            switch_freekiki_run,
+        )
 
     cap.release()
     pygame.quit()
+
+    if freekiki_session is not None:
+        _review_sync_all()
+        freekiki_api.save_review_session(freekiki_session)
+        with contextlib.suppress(Exception):
+            freekiki_api.export_reviewed_session(freekiki_session)
+            save_coordinates(
+                video_path,
+                coordinates,
+                total_frames,
+                deleted_positions,
+                is_sequential=False,
+                fixed_keypoints_count=49,
+                coord_format="float",
+                coord_decimals=2,
+            )
 
     if saved:
         print("Coordinates were saved.")
@@ -15556,6 +16955,43 @@ def load_coordinates_from_file(total_frames, video_width=None, video_height=None
     return {i: [] for i in range(total_frames)}, []
 
 
+def resolve_media_output_dir_and_stem(
+    media_path: str | None,
+    *,
+    frame_file: str | None = None,
+) -> tuple[str, str]:
+    """Return ``(output_dir, stem)`` for files saved next to the opened media.
+
+    Image sequences set ``video_path`` to the folder of frames. Using
+    ``os.path.dirname`` on that path wrongly points at the parent (often
+    ``$HOME``). When ``media_path`` is a directory, use the directory itself
+    as ``output_dir``, but name files from ``frame_file`` (the concrete
+    PNG/JPG/…) when provided — never from the folder name alone.
+    """
+    frame = os.path.abspath(str(frame_file)) if frame_file else None
+    if frame and not os.path.isfile(frame):
+        frame = None
+
+    if not media_path:
+        if frame:
+            parent = os.path.dirname(frame) or os.getcwd()
+            stem = os.path.splitext(os.path.basename(frame))[0] or "media"
+            return parent, stem
+        return os.getcwd(), "media"
+
+    path = os.path.abspath(str(media_path))
+    if os.path.isdir(path):
+        if frame:
+            stem = os.path.splitext(os.path.basename(frame))[0] or "media"
+        else:
+            stem = os.path.basename(path.rstrip(os.sep)) or "media"
+        return path, stem
+
+    parent = os.path.dirname(path) or os.getcwd()
+    stem = os.path.splitext(os.path.basename(path))[0] or "media"
+    return parent, stem
+
+
 def save_coordinates(
     video_path,
     coordinates,
@@ -15569,9 +17005,9 @@ def save_coordinates(
     coord_format: str = "int",
     coord_decimals: int = 1,
     output_file: str | None = None,
+    frame_file: str | None = None,
 ):
-    base_name = os.path.splitext(os.path.basename(video_path))[0]
-    video_dir = os.path.dirname(video_path)
+    video_dir, base_name = resolve_media_output_dir_and_stem(video_path, frame_file=frame_file)
 
     # Create different filenames based on the mode
     if output_file is not None:
@@ -15581,12 +17017,29 @@ def save_coordinates(
     else:
         output_file = os.path.join(video_dir, f"{base_name}_markers.csv")
 
+    # Determina o número máximo de pontos marcados em qualquer frame.
+    max_points_detected = max((len(points) for points in (coordinates or {}).values()), default=0)
+    n_marked = sum(
+        1
+        for pts in (coordinates or {}).values()
+        for p in pts
+        if p is not None and p[0] is not None and p[1] is not None
+    )
+
+    # Never overwrite a filled markers CSV with a frame-only empty file
+    # (Escape quit used to wipe Quick Measure exports this way).
+    if n_marked == 0 and not (
+        fixed_keypoints_count is not None and int(fixed_keypoints_count) > 0
+    ):
+        print(
+            f">> vaila/getpixelvideo: skip empty markers write "
+            f"(keep existing if any): {output_file}"
+        )
+        return output_file
+
     # Initialize deleted_positions if not provided
     if deleted_positions is None:
         deleted_positions = {i: set() for i in range(total_frames)}
-
-    # Determina o número máximo de pontos marcados em qualquer frame.
-    max_points_detected = max((len(points) for points in coordinates.values()), default=0)
     if fixed_keypoints_count is not None and fixed_keypoints_count > 0:
         max_points = fixed_keypoints_count
     else:
@@ -16127,6 +17580,11 @@ def export_pose_dataset(
     """
     import random
 
+    try:
+        from .freekiki import write_pose_pair
+    except ImportError:
+        from freekiki import write_pose_pair  # ty: ignore[unresolved-import]
+
     image_ext = str(image_format or "jpg").lower().lstrip(".")
     if image_ext != "png":
         image_ext = "jpg"
@@ -16398,12 +17856,9 @@ def export_pose_dataset(
             img_dir, lbl_dir = _split_paths(dataset_dir, split_name, layout_to_use)
             img_filename = f"{file_prefix}frame_{frame_num:06d}.{image_ext}"
             img_path = os.path.join(img_dir, img_filename)
-            cv2.imwrite(img_path, frame)
-
             txt_filename = f"{file_prefix}frame_{frame_num:06d}.txt"
             txt_path = os.path.join(lbl_dir, txt_filename)
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write(" ".join(parts) + "\n")
+            write_pose_pair(Path(img_path), Path(txt_path), frame, " ".join(parts) + "\n")
             written += 1
 
     cap.release()
@@ -16562,16 +18017,15 @@ def _write_pose_data_yaml(
 
 
 def _dir_contains_png_files(directory: str) -> bool:
+    """True when ``directory`` holds at least one still image (historical name)."""
     try:
-        return os.path.isdir(directory) and any(
-            f.lower().endswith(".png") for f in os.listdir(directory)
-        )
+        return os.path.isdir(directory) and any(_is_still_image(f) for f in os.listdir(directory))
     except OSError:
         return False
 
 
 def _resolve_png_sequence_directory(directory: str, *, max_subdirs: int = 500) -> str | None:
-    """Use directory if it contains PNGs, else first immediate subdirectory that does."""
+    """Use directory if it contains stills, else first immediate subdirectory that does."""
     if not directory or not os.path.isdir(directory):
         return None
     if _dir_contains_png_files(directory):
@@ -16593,14 +18047,17 @@ def _resolve_png_sequence_directory(directory: str, *, max_subdirs: int = 500) -
 
 
 def classify_media_path(path: str) -> tuple[str | None, str | None, int]:
-    """Auto-detect video / single PNG / PNG sequence from a file or directory path.
+    """Auto-detect video / single still / image sequence from a file or directory path.
+
+    Still extensions: png, jpg, jpeg, bmp, tif, tiff, webp. Source types stay
+    ``single_png`` and ``png_sequence`` for every still extension.
 
     Rules:
-    - Directory → PNG sequence (this dir or first child with PNGs), start frame 0.
-    - ``.png`` with sibling PNGs (>1) → PNG sequence of the parent folder, starting
+    - Directory → image sequence (this dir or first child with stills), start frame 0.
+    - A still with sibling stills (>1) → image sequence of the parent folder, starting
       at the selected file's natural-sorted index (not always the alphabetically
-      first frame).
-    - Lone ``.png`` → single PNG.
+      first frame). Mixed extensions in one folder share that list.
+    - Lone still → single image.
     - Any other existing file → video.
 
     Returns:
@@ -16613,24 +18070,24 @@ def classify_media_path(path: str) -> tuple[str | None, str | None, int]:
     if os.path.isdir(path):
         resolved = _resolve_png_sequence_directory(path)
         if resolved:
-            count = sum(1 for f in os.listdir(resolved) if f.lower().endswith(".png"))
-            print(f"PNG sequence selected: {resolved} ({count} images)")
+            count = sum(1 for f in os.listdir(resolved) if _is_still_image(f))
+            print(f"Image sequence selected: {resolved} ({count} images)")
             return (resolved, "png_sequence", 0)
-        print(f"Directory has no PNG frames: {path}")
+        print(f"Directory has no still images: {path}")
         return (None, None, 0)
     if not os.path.isfile(path):
         print(f"Path not found: {path}")
         return (None, None, 0)
-    if path.lower().endswith(".png"):
+    if _is_still_image(path):
         parent = os.path.dirname(path)
         try:
-            png_count = sum(1 for f in os.listdir(parent) if f.lower().endswith(".png"))
+            still_count = sum(1 for f in os.listdir(parent) if _is_still_image(f))
         except OSError:
-            png_count = 1
-        if png_count > 1:
+            still_count = 1
+        if still_count > 1:
             start_idx = _png_sequence_index_for_file(parent, path)
             print(
-                f"PNG sequence detected from frame: {parent} ({png_count} images); "
+                f"Image sequence detected from frame: {parent} ({still_count} images); "
                 f"start index {start_idx} ({Path(path).name})"
             )
             return (parent, "png_sequence", start_idx)
@@ -16643,7 +18100,7 @@ def classify_media_path(path: str) -> tuple[str | None, str | None, int]:
 def _get_media_path_linux():
     """Linux-native media selection using zenity to avoid Tkinter/Pygame conflicts.
 
-    Single file dialog — source type is auto-detected (pick any PNG in a sequence folder).
+    Single file dialog — source type is auto-detected (pick any still in a sequence folder).
 
     Returns:
         tuple: (path, source_type, start_frame) or (None, None, 0) if cancelled.
@@ -16653,14 +18110,16 @@ def _get_media_path_linux():
     except (subprocess.CalledProcessError, FileNotFoundError):
         return _get_media_path_terminal()
 
+    still_globs = _still_image_dialog_globs()
+    video_globs = "*.mp4 *.avi *.mov *.mkv *.webm *.MP4 *.AVI *.MOV *.MKV *.WEBM"
     result = subprocess.run(
         [
             "zenity",
             "--file-selection",
-            "--title=Select video, PNG, or any frame from a PNG sequence folder",
-            "--file-filter=Video files|*.mp4 *.avi *.mov *.mkv *.webm *.MP4 *.AVI *.MOV *.MKV *.WEBM",
-            "--file-filter=PNG image|*.png *.PNG",
-            "--file-filter=All supported|*.mp4 *.avi *.mov *.mkv *.webm *.png",
+            "--title=Select video, still image, or any frame from an image sequence folder",
+            f"--file-filter=Video files|{video_globs}",
+            f"--file-filter=Still image|{still_globs}",
+            f"--file-filter=All supported|{video_globs} {still_globs}",
         ],
         capture_output=True,
         text=True,
@@ -16675,7 +18134,7 @@ def _get_media_path_terminal():
     """Terminal fallback when no GUI dialog is available."""
     try:
         print("\nOpen media - Terminal mode (zenity not available)")
-        print("Enter path to a video, PNG file, or PNG sequence folder (q = cancel)")
+        print("Enter path to a video, still image, or image-sequence folder (q = cancel)")
         path = input("Path: ").strip()
     except EOFError:
         print("No interactive terminal. Install zenity for GUI: sudo apt install zenity")
@@ -16685,12 +18144,66 @@ def _get_media_path_terminal():
     return classify_media_path(path)
 
 
+def ensure_decodable_video(path: str) -> str | None:
+    """``path`` when OpenCV decodes it, else (after asking) an H.264 copy, else None.
+
+    opencv-python's bundled FFmpeg has no software AV1 decoder, so AV1 videos
+    (e.g. YouTube downloads) open but never return a frame. The copy
+    (``<stem>_h264.mp4`` beside the source) keeps every frame and timestamp;
+    an existing readable copy is reused without asking.
+    """
+    try:
+        from .ffmpeg_utils import opencv_compatible_copy, opencv_copy_path, opencv_reads_video
+    except ImportError:
+        from ffmpeg_utils import (  # ty: ignore[unresolved-import]
+            opencv_compatible_copy,
+            opencv_copy_path,
+            opencv_reads_video,
+        )
+
+    if opencv_reads_video(path):
+        return path
+    copy_path = opencv_copy_path(path)
+    if copy_path.is_file() and opencv_reads_video(copy_path):
+        print(f"OpenCV cannot decode {Path(path).name}; opening its H.264 copy: {copy_path}")
+        return str(copy_path)
+    codec = get_precise_video_metadata(path).get("codec") or "unknown"
+    message = (
+        f"OpenCV cannot decode {Path(path).name} (video codec: {codec}).\n"
+        "The FFmpeg inside opencv-python has no software AV1 decoder.\n\n"
+        f"Create an H.264 copy beside it and open that?\n{copy_path.name}\n\n"
+        "Same frames and timestamps; the original is kept. Takes a few minutes."
+    )
+    print(message)
+    import tkinter as tk
+    from tkinter import messagebox
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        convert = messagebox.askyesno("Video codec not supported", message, parent=root)
+        root.destroy()
+    except tk.TclError:
+        convert = input("Convert to H.264? [y/N] ").strip().lower() in ("y", "yes")
+    if not convert:
+        print("Video not opened (codec not supported by OpenCV).")
+        return None
+    try:
+        copy_path = opencv_compatible_copy(path)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"H.264 conversion failed: {exc}")
+        return None
+    print(f"Opening H.264 copy: {copy_path}")
+    return str(copy_path)
+
+
 def get_media_path():
-    """Open one file picker; auto-detect video, single PNG, or PNG sequence.
+    """Open one file picker; auto-detect video, single still, or image sequence.
 
     On Linux, uses zenity to avoid Tkinter/Pygame display conflicts.
-    For a PNG sequence, select any frame in the folder (or pass the folder path
-    via CLI / terminal). The selected PNG becomes the starting frame index.
+    For an image sequence, select any frame in the folder (or pass the folder path
+    via CLI / terminal). The selected still becomes the starting frame index.
 
     Returns:
         tuple: (path, source_type, start_frame) where source_type is
@@ -16708,13 +18221,14 @@ def get_media_path():
         root.attributes("-topmost", True)
         root.update_idletasks()
 
+        still_globs = _still_image_dialog_globs()
         file_types = [
             ("Video Files", "*.mp4 *.MP4 *.avi *.AVI *.mov *.MOV *.mkv *.MKV *.webm *.WEBM"),
-            ("PNG Image", "*.png *.PNG"),
-            ("All supported", "*.mp4 *.avi *.mov *.mkv *.webm *.png"),
+            ("Still image", still_globs),
+            ("All supported", f"*.mp4 *.avi *.mov *.mkv *.webm {still_globs}"),
         ]
         path = filedialog.askopenfilename(
-            title="Select video, PNG, or any frame from a PNG sequence folder",
+            title="Select video, still image, or any frame from an image sequence folder",
             filetypes=file_types,
         )
         root.destroy()
@@ -16746,6 +18260,7 @@ def run_getpixelvideo(
     initial_source_type=None,
     initial_fifa_mode: bool = False,
     initial_start_frame: int = 0,
+    freekiki_options: dict | None = None,
 ):
     # Print the script version and directory
     print(f"Running script: {Path(__file__).name}")
@@ -16758,12 +18273,16 @@ def run_getpixelvideo(
         media_path, source_type = initial_media_path, initial_source_type
         print(f"Using CLI media: {media_path} ({source_type})")
         if source_type == "png_sequence" and start_frame:
-            print(f"PNG sequence start frame index: {start_frame}")
+            print(f"Image sequence start frame index: {start_frame}")
     else:
         media_path, source_type, start_frame = get_media_path()
     if not media_path or not source_type:
         print("No media selected. Exiting.")
         return
+    if source_type == "video":
+        media_path = ensure_decodable_video(media_path)
+        if media_path is None:
+            return
 
     video_path = media_path  # logical path for saving (file or dir)
 
@@ -16782,7 +18301,7 @@ def run_getpixelvideo(
     if source_type == "video":
         metadata = get_precise_video_metadata(media_path)
     else:
-        metadata = get_image_sequence_metadata(media_path, source_type)
+        metadata = get_image_sequence_metadata(media_path, source_type, start_index=start_frame)
     total_frames = metadata.get("nb_frames") or int(frame_source.get(cv2.CAP_PROP_FRAME_COUNT))
     vw = metadata.get("width") or int(frame_source.get(cv2.CAP_PROP_FRAME_WIDTH))
     vh = metadata.get("height") or int(frame_source.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -16819,9 +18338,21 @@ def run_getpixelvideo(
             metadata=metadata,
             initial_fifa_mode=initial_fifa_mode,
             initial_frame=start_frame,
+            freekiki_options=freekiki_options,
         )
         # F8 "Open another video" returns (switch_video, new_path, current_dataset_dir, labeling_mode)
         if result and len(result) >= 3 and result[0] == "switch_video":
+            if len(result) > 4 and result[4]:
+                # FreeKiki Load: the new video opens in FreeKiki correction mode.
+                try:
+                    from . import freekiki as _freekiki
+                except ImportError:
+                    import freekiki as _freekiki  # ty: ignore[unresolved-import]
+                freekiki_options = _freekiki.freekiki_run_options(result[4])
+                initial_fifa_mode = True  # same as the --freekiki CLI flags
+            elif freekiki_options is not None:
+                freekiki_options["session"] = None
+                freekiki_options["predictions"] = None
             video_path = result[1]
             initial_dataset_dir = result[2]
             initial_labeling_mode = result[3] if len(result) > 3 else False
@@ -16829,9 +18360,13 @@ def run_getpixelvideo(
             labels = []
             # Re-open media for next iteration (path may be video, single_png, or png_sequence dir)
             frame_source.release()
-            media_path, source_type, start_frame = get_media_path()
+            media_path, source_type, start_frame = classify_media_path(video_path)
             if not media_path or not source_type:
                 break
+            if source_type == "video":
+                media_path = ensure_decodable_video(media_path)
+                if media_path is None:
+                    break
             video_path = media_path
             frame_source = create_frame_source(media_path, source_type, start_index=start_frame)
             if not frame_source.isOpened():
@@ -16840,7 +18375,9 @@ def run_getpixelvideo(
             if source_type == "video":
                 metadata = get_precise_video_metadata(media_path)
             else:
-                metadata = get_image_sequence_metadata(media_path, source_type)
+                metadata = get_image_sequence_metadata(
+                    media_path, source_type, start_index=start_frame
+                )
             total_frames = metadata.get("nb_frames") or int(
                 frame_source.get(cv2.CAP_PROP_FRAME_COUNT)
             )
@@ -16859,11 +18396,18 @@ if __name__ == "__main__":
     if "-h" in sys.argv or "--help" in sys.argv:
         print(
             "Usage: uv run vaila/getpixelvideo.py [options]\n"
-            "  -f, --file PATH     Video, single PNG, or folder of PNG frames (auto-detect)\n"
-            "  -d, --dir DIR       Folder of PNG frames (same as --sequence; subfolders ok)\n"
-            "  --sequence DIR      Folder of PNG frames\n"
+            "  -f, --file PATH     Video, single still image, or folder of frames (auto-detect)\n"
+            "  -d, --dir DIR       Folder of still images (png/jpg/jpeg/bmp/tif/tiff/webp)\n"
+            "  --sequence DIR      Folder of still images (same as --dir; subfolders ok)\n"
             "  --dataset DIR       YOLO / multi-video dataset root\n"
             "  --fifa / --fifa-dataset [DIR]  FIFA labeling mode\n"
+            "  --freekiki  Manual Kiki49 review session\n"
+            "  --freekiki-workspace WS  Save under WS/incoming; enable active-model prediction\n"
+            "  --freekiki-session SESSION.json  Reopen reviewed markers and states\n"
+            "  --freekiki-predictions DIR  Load detect's field_kps_raw.csv\n"
+            "  --freekiki-export-mode MODE  Default export mode: full (all frames) or only_correct\n"
+            "  --freekiki-videos DIR  Review videos in a folder\n"
+            "  --freekiki-run DIR  FreeKiki Load: open a freekiki detect run/batch folder (finds the video)\n"
             "  --export-bbox-coords PATH  Convert bbox tracking/contours to five coordinate CSVs and exit\n"
             "Run without arguments to open one file picker (type auto-detected).\n"
             "Full options are documented in the module docstring (top of getpixelvideo.py)."
@@ -16899,6 +18443,31 @@ if __name__ == "__main__":
     initial_source_type = None
     initial_start_frame = 0
     initial_fifa_mode = False
+    freekiki_options = None
+    if any(
+        arg in sys.argv
+        for arg in (
+            "--freekiki",
+            "--freekiki-workspace",
+            "--freekiki-session",
+            "--freekiki-predictions",
+            "--freekiki-export-mode",
+            "--freekiki-videos",
+        )
+    ):
+        freekiki_options = {}
+        for flag, key in (
+            ("--freekiki-workspace", "workspace"),
+            ("--freekiki-session", "session"),
+            ("--freekiki-predictions", "predictions"),
+            ("--freekiki-export-mode", "export_mode"),
+        ):
+            if flag in sys.argv:
+                pos = sys.argv.index(flag)
+                if pos + 1 >= len(sys.argv) or sys.argv[pos + 1].startswith("-"):
+                    raise SystemExit(f"{flag} requires a path")
+                freekiki_options[key] = sys.argv[pos + 1]
+        initial_fifa_mode = True
 
     if "--dataset" in sys.argv:
         idx = sys.argv.index("--dataset")
@@ -16937,9 +18506,9 @@ if __name__ == "__main__":
                 initial_source_type = "png_sequence"
                 initial_start_frame = 0
                 if resolved != os.path.abspath(seq_dir):
-                    print(f"PNG sequence: using subdirectory with frames: {resolved}")
+                    print(f"Image sequence: using subdirectory with frames: {resolved}")
             else:
-                print(f"Error: --sequence path has no folder with PNGs: {seq_dir}")
+                print(f"Error: --sequence path has no folder with still images: {seq_dir}")
 
     if initial_media_path is None and ("-d" in sys.argv or "--dir" in sys.argv):
         opt = "-d" if "-d" in sys.argv else "--dir"
@@ -16952,9 +18521,9 @@ if __name__ == "__main__":
                 initial_source_type = "png_sequence"
                 initial_start_frame = 0
                 if resolved != os.path.abspath(seq_dir):
-                    print(f"PNG sequence: using subdirectory with frames: {resolved}")
+                    print(f"Image sequence: using subdirectory with frames: {resolved}")
             else:
-                print(f"Error: {opt} path has no folder with PNGs: {seq_dir}")
+                print(f"Error: {opt} path has no folder with still images: {seq_dir}")
 
     if initial_media_path is None and ("-f" in sys.argv or "--file" in sys.argv):
         opt = "-f" if "-f" in sys.argv else "--file"
@@ -16969,10 +18538,65 @@ if __name__ == "__main__":
             else:
                 print(f"Error: {opt} path is not usable media: {file_path}")
 
+    if (
+        freekiki_options is not None
+        and freekiki_options.get("session")
+        and initial_media_path is None
+    ):
+        try:
+            from . import freekiki as _freekiki
+        except ImportError:
+            import freekiki as _freekiki  # ty: ignore[unresolved-import]
+        session = _freekiki.load_review_session(freekiki_options["session"])
+        initial_media_path = session["video"]
+        initial_source_type = "video"
+    if "--freekiki-run" in sys.argv:
+        pos = sys.argv.index("--freekiki-run")
+        if pos + 1 >= len(sys.argv):
+            raise SystemExit("--freekiki-run requires a freekiki detect run or batch folder")
+        try:
+            from . import freekiki as _fk
+        except ImportError:
+            import freekiki as _fk  # ty: ignore[unresolved-import]
+        runs = _fk.detect_runs(sys.argv[pos + 1])
+        if not runs:
+            raise SystemExit(f"Not a freekiki detect run or batch: {sys.argv[pos + 1]}")
+        for run, video in runs:  # a batch opens its videos one after the other
+            run_getpixelvideo(
+                initial_media_path=str(video),
+                initial_source_type="video",
+                initial_fifa_mode=True,
+                freekiki_options=_fk.freekiki_run_options(run),
+            )
+        raise SystemExit(0)
+
+    if "--freekiki-videos" in sys.argv:
+        assert freekiki_options is not None
+        pos = sys.argv.index("--freekiki-videos")
+        if pos + 1 >= len(sys.argv):
+            raise SystemExit("--freekiki-videos requires a directory")
+        directory = Path(sys.argv[pos + 1])
+        videos = sorted(
+            p
+            for p in directory.iterdir()
+            if p.suffix.lower() in (".mp4", ".avi", ".mkv", ".mov", ".webm")
+        )
+        if not videos:
+            raise SystemExit(f"No videos in {directory}")
+        for video in videos:
+            run_getpixelvideo(
+                initial_media_path=str(video),
+                initial_source_type="video",
+                initial_fifa_mode=True,
+                freekiki_options=dict(freekiki_options),
+            )
+        raise SystemExit(0)
+
     run_getpixelvideo(
         initial_dataset_dir=initial_dataset_dir,
         initial_media_path=initial_media_path,
         initial_source_type=initial_source_type,
         initial_fifa_mode=initial_fifa_mode,
         initial_start_frame=initial_start_frame,
+        freekiki_options=freekiki_options,
     )

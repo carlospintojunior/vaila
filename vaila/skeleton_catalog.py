@@ -1,10 +1,11 @@
 """Skeleton pose template catalog for getpixelvideo ``Tpl:`` and related tools.
 
 Loads canonical JSON presets from ``vaila/skeletons/`` (excluding soccer-field
-layouts, which use the dedicated Soccer-Kiki pitch-guide path).
+layouts, which use the dedicated Soccer-Kiki pitch-guide path). FreeKiki
+(kiki49 review) is a special non-JSON mode listed next to Soccer-Kiki.
 
-Update Date: 17 September 2026
-Version: 0.4.3
+Update Date: 02 October 2026
+Version: 0.4.7
 """
 
 from __future__ import annotations
@@ -35,11 +36,13 @@ _POSE_TEMPLATE_ORDER: tuple[tuple[str, str, str, str], ...] = (
 
 # Special (non-JSON) modes always available in the Tpl dialog.
 # Internal id stays ``fifa`` for CLI/TOML/dataset compatibility; UI label is Soccer-Kiki.
-SPECIAL_TEMPLATE_IDS: frozenset[str] = frozenset({"free", "fifa"})
+# ``freekiki`` starts a kiki49 human-review session (see getpixelvideo FreeKiki path).
+SPECIAL_TEMPLATE_IDS: frozenset[str] = frozenset({"free", "fifa", "freekiki"})
 
 SPECIAL_TEMPLATE_LABELS: dict[str, str] = {
     "free": "Free",
     "fifa": "Soccer-Kiki",
+    "freekiki": "FreeKiki49",
 }
 
 
@@ -167,17 +170,25 @@ def dialog_choices() -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = [
         ("free", "Free (variable markers)"),
         ("fifa", "Soccer-Kiki (pitch guide)"),
+        ("freekiki", "FreeKiki kiki49 (49 field KPs)"),
     ]
     for spec in list_pose_templates():
         rows.append((spec.id, spec.dialog_label))
     return rows
 
 
+# Not a template: opens a freekiki detect run folder (its video + label correction).
+FREEKIKI_LOAD_ID = "freekiki_load"
+FREEKIKI_LOAD_LINE = "L = FreeKiki Load (freekiki run folder -> video + label correction)"
+
+
 def format_template_dialog_prompt() -> str:
     """Multi-line prompt for ``show_input_dialog`` (one option per line)."""
     lines = ["Tpl — choose skeleton:"]
-    for idx, (_tid, label) in enumerate(dialog_choices()):
+    for idx, (tid, label) in enumerate(dialog_choices()):
         lines.append(f"{idx} = {label}")
+        if tid == "freekiki":
+            lines.append(FREEKIKI_LOAD_LINE)
     return "\n".join(lines)
 
 
@@ -188,6 +199,8 @@ def resolve_dialog_choice(answer: str | None) -> str | None:
     raw = str(answer).strip().lower()
     if not raw:
         return None
+    if raw in ("l", "load", FREEKIKI_LOAD_ID):
+        return FREEKIKI_LOAD_ID
     choices = dialog_choices()
     # Numeric index.
     if raw.isdigit():

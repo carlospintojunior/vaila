@@ -1,7 +1,7 @@
 """Tests for vaila.skeleton_catalog (Tpl: pose presets).
 
-Update Date: 17 September 2026
-Version: 0.4.3
+Update Date: 02 October 2026
+Version: 0.4.7
 """
 
 from __future__ import annotations
@@ -82,6 +82,7 @@ def test_template_labels_include_specials_and_pose() -> None:
     labels = skeleton_catalog.template_labels()
     assert labels["free"] == "Free"
     assert labels["fifa"] == "Soccer-Kiki"
+    assert labels["freekiki"] == "FreeKiki49"
     assert labels["sam3d70"] == "SAM3D70"
     assert labels["sapiens308"] == "Sapiens308"
     assert labels["mediapipe"] == "MediaPipe33"
@@ -93,11 +94,15 @@ def test_dialog_prompt_is_column_layout() -> None:
     assert lines[0].startswith("Tpl —")
     assert "0 = Free" in lines[1]
     assert "1 = Soccer-Kiki" in lines[2]
+    assert "2 = FreeKiki kiki49" in lines[3]
     assert "FIFA Soccer-Field" not in prompt
+    assert "type freekiki" not in prompt
     assert any("SAM3+DINOv3" in line for line in lines)
     assert any("Sapiens2 Goliath" in line for line in lines)
-    # One option per line after the header.
-    assert len(lines) == 1 + len(skeleton_catalog.dialog_choices())
+    # FreeKiki Load sits right under FreeKiki (letter L; numbers unchanged).
+    assert lines[4].startswith("L = FreeKiki Load")
+    # One option per line after the header, plus the L line.
+    assert len(lines) == 2 + len(skeleton_catalog.dialog_choices())
 
 
 def test_resolve_dialog_choice_numeric_and_id() -> None:
@@ -105,10 +110,15 @@ def test_resolve_dialog_choice_numeric_and_id() -> None:
     assert skeleton_catalog.resolve_dialog_choice("") is None
     assert skeleton_catalog.resolve_dialog_choice("0") == "free"
     assert skeleton_catalog.resolve_dialog_choice("1") == "fifa"
-    assert skeleton_catalog.resolve_dialog_choice("2") == "mediapipe"
-    assert skeleton_catalog.resolve_dialog_choice("7") == "sam3d70"
-    assert skeleton_catalog.resolve_dialog_choice("8") == "sapiens308"
+    assert skeleton_catalog.resolve_dialog_choice("2") == "freekiki"
+    assert skeleton_catalog.resolve_dialog_choice("3") == "mediapipe"
+    for answer in ("L", "l", "load"):
+        assert skeleton_catalog.resolve_dialog_choice(answer) == skeleton_catalog.FREEKIKI_LOAD_ID
+    assert skeleton_catalog.resolve_dialog_choice("8") == "sam3d70"
+    assert skeleton_catalog.resolve_dialog_choice("9") == "sapiens308"
     assert skeleton_catalog.resolve_dialog_choice("sam3d70") == "sam3d70"
+    assert skeleton_catalog.resolve_dialog_choice("freekiki") == "freekiki"
+    assert skeleton_catalog.resolve_dialog_choice("kiki49") == "freekiki"
     assert skeleton_catalog.resolve_dialog_choice("99") is None
 
 
@@ -133,6 +143,7 @@ def test_template_button_caption_shows_soccer_kiki() -> None:
 
     # In other modes, use the Tpl: prefix.
     assert template_button_caption("free") == "Tpl: Free"
+    assert template_button_caption("freekiki") == "Tpl: FreeKiki49"
     assert template_button_caption("mediapipe") == "Tpl: MediaPipe33"
     assert template_button_caption("yolo") == "Tpl: YOLO17"
     assert template_button_caption("sam3d70") == "Tpl: SAM3D70"
