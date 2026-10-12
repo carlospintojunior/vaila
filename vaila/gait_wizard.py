@@ -22,12 +22,14 @@ per screen:
                    whole video", or reuse a previous cut.
 3. Processamento - the user ticks the side-view (lateral) cameras and clicks
                    "Analisar": MediaPipe + automatic gait events/phases
-                   (gait_auto.py) + MP Angles joint angles (mpangles.py),
-                   with a plain-language checklist and elapsed time.
+                   (gait_auto.py) + MP Angles joint angles and the MP Angles
+                   skeleton + angles video (mpangles.py), with a
+                   plain-language checklist and elapsed time.
 4. Resultados    - a few big numbers (cadence, stance/swing, stride time,
                    symmetry), joint angles over the gait cycle, plain advice
-                   when the recording has problems, and buttons to open the
-                   full report or the results folder.
+                   when the recording has problems, a big button that plays
+                   the skeleton + angles video, and buttons to open the full
+                   report or the results folder.
 
 Progress is saved in <session_dir>/assistente_marcha.json, so closing the
 program and coming back resumes where the user stopped.
@@ -35,7 +37,9 @@ program and coming back resumes where the user stopped.
 Output (inside the analysed folder, i.e. the cut folder or the session):
 gait_analysis_YYYYMMDD_HHMMSS/
     gait_report.html, gait_events.csv, gait_cycles.csv, gait_summary.csv
+    angles/angles_<video>.mp4                            skeleton + angles video (H.264)
     angles/<video>_rel.csv, _abs_180.csv, _abs_360.csv   (MP Angles)
+    angles/<video>.csv       landmarks low-passed at 6 Hz (input of MP Angles)
     joint_angles_cycle.csv   mean/SD per % of the gait cycle
     joint_angles_cycle.png   hip / knee / ankle over the gait cycle
 
@@ -278,12 +282,76 @@ def normalize_cycles(
     return rows
 
 
-def compute_cycle_angles(gait: GaitResult, log: Callable[[str], None] = print) -> list[dict]:
-    """Run MP Angles on each analysed camera and cut the angles into gait cycles."""
+def smooth_landmarks_csv(src: Path, dst: Path, fs: float) -> None:
+    """Low-pass every landmark column of a ``_pixel_vaila.csv``, keeping no-person frames empty.
+
+    MP Angles' own filter (filtfilt over the whole column) turns a column with
+    any NaN into all-NaN, and webcam sessions always have frames with nobody
+    in view; filtering here keeps the angle video steady instead of jittery.
+    """
+    df = pd.read_csv(src)
+    for col in df.columns[1:]:
+        df[col] = _smooth(df[col].to_numpy(dtype=float), fs)
+    df.to_csv(dst, index=False, float_format="%.3f")
+
+
+def to_h264(video: Path, log: Callable[[str], None] = print) -> Path:
+    """Re-encode OpenCV's MPEG-4 Part 2 output to H.264 (plays in any player and browser).
+
+    Returns the original file if FFmpeg is unavailable or fails.
+    """
     try:
-        from .mpangles import process_angles
+        from .ffmpeg_utils import get_ffmpeg_path
     except ImportError:
-        from mpangles import process_angles  # ty: ignore[unresolved-import]
+        from ffmpeg_utils import get_ffmpeg_path  # ty: ignore[unresolved-import]
+
+    tmp = video.with_name(video.stem + "_h264.mp4")
+    cmd = [
+        get_ffmpeg_path(),
+        "-y",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-i",
+        str(video),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-an",
+        str(tmp),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
+        tmp.replace(video)
+    except Exception as exc:  # noqa: BLE001 - the MPEG-4 file is still usable
+        log(f"H.264 re-encode skipped for {video.name}: {exc}")
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+    return video
+
+
+def compute_cycle_angles(
+    gait: GaitResult, log: Callable[[str], None] = print, make_video: bool = True
+) -> list[dict]:
+    """Run MP Angles on each analysed camera and cut the angles into gait cycles.
+
+    With ``make_video`` it also renders MP Angles' skeleton + angles video
+    (``angles/angles_<video>.mp4``) for every camera.
+    """
+    try:
+        from .mpangles import process_angles, process_video_with_visualization
+    except ImportError:
+        from mpangles import (  # ty: ignore[unresolved-import]
+            process_angles,
+            process_video_with_visualization,
+        )
 
     angles_dir = gait.out_dir / "angles"
     angles_dir.mkdir(exist_ok=True)
@@ -293,15 +361,40 @@ def compute_cycle_angles(gait: GaitResult, log: Callable[[str], None] = print) -
         if not csv.is_file():
             log(f"MP Angles: {csv.name} not found, skipping {video.name}")
             continue
-        _df, rel, _abs180, _abs360 = process_angles(
-            str(csv), str(angles_dir / f"{video.stem}.csv"), {"enabled": False}
-        )
+        w, h, count, fps = _video_size(video)
+        times = read_frame_times(video, count, fps)
+        fs = 1.0 / float(np.median(np.diff(times))) if len(times) > 1 else fps
+        smooth_csv = angles_dir / f"{video.stem}.csv"
+        smooth_landmarks_csv(csv, smooth_csv, fs)
+        rel_csv = angles_dir / f"{video.stem}_rel.csv"
+        if make_video:
+            log(f"MP Angles: rendering the angle video for {video.name}")
+            with contextlib.suppress(Exception):
+                process_video_with_visualization(
+                    str(video), str(smooth_csv), str(angles_dir), {"enabled": False}
+                )
+            rendered = angles_dir / f"angles_{video.name}"
+            if rendered.is_file():
+                to_h264(rendered, log)
+        if not rel_csv.is_file():
+            process_angles(str(smooth_csv), str(smooth_csv), {"enabled": False}, (w, h))
+        rel = pd.read_csv(rel_csv)
         if gait.cycles.empty:
             continue
-        _w, _h, count, fps = _video_size(video)
-        times = read_frame_times(video, max(count, len(rel)), fps)
+        if len(times) < len(rel):
+            times = read_frame_times(video, len(rel), fps)
         rows += normalize_cycles(rel, times, gait.cycles, camera_name(video))
     return rows
+
+
+def angle_videos(out_dir: Path, passes: dict[str, int] | None = None) -> list[tuple[str, Path]]:
+    """``[(camera, angles_<video>.mp4)]``, cameras with valid walking passes first."""
+    found = [
+        (camera_name(Path(p.name.removeprefix("angles_"))), p)
+        for p in sorted((out_dir / "angles").glob("angles_*.mp4"))
+    ]
+    passes = passes or {}
+    return sorted(found, key=lambda cv: (passes.get(cv[0], 0) == 0, cv[0]))
 
 
 def cycle_angle_table(rows: list[dict]) -> pd.DataFrame:
@@ -368,16 +461,33 @@ def plot_cycle_angles(rows: list[dict], png: Path) -> bool:
     return True
 
 
-def add_angles_to_report(report: Path, png: Path) -> None:
-    """Insert the joint-angle figure into gait_auto's HTML report."""
-    data = base64.b64encode(png.read_bytes()).decode("ascii")
-    section = (
-        "<h2>Joint angles over the gait cycle (MP Angles)</h2>"
-        "<p>Mean ± SD per side; dashed line = toe-off. Knee shown as flexion "
-        "(0° = straight leg). In a side view the leg farther from the camera is "
-        "partly hidden, so its curve is less reliable.</p>"
-        f"<img src='data:image/png;base64,{data}' style='max-width:100%'>\n"
-    )
+def add_angles_to_report(
+    report: Path, png: Path | None, videos: list[tuple[str, Path]] | None = None
+) -> None:
+    """Insert the joint-angle figure and the MP Angles videos into gait_auto's HTML report.
+
+    Videos are linked by relative path (not embedded), so they play while the
+    report stays in its analysis folder.
+    """
+    section = ""
+    if png is not None:
+        data = base64.b64encode(png.read_bytes()).decode("ascii")
+        section += (
+            "<h2>Joint angles over the gait cycle (MP Angles)</h2>"
+            "<p>Mean ± SD per side; dashed line = toe-off. Knee shown as flexion "
+            "(0° = straight leg). In a side view the leg farther from the camera is "
+            "partly hidden, so its curve is less reliable.</p>"
+            f"<img src='data:image/png;base64,{data}' style='max-width:100%'>\n"
+        )
+    for camera, video in videos or []:
+        rel = video.relative_to(report.parent).as_posix()
+        section += (
+            f"<h2>{camera}: skeleton and joint angles (MP Angles)</h2>"
+            f"<video src='{rel}' controls style='max-width:100%'></video>"
+            f"<p><a href='{rel}'>{video.name}</a></p>\n"
+        )
+    if not section:
+        return
     text = report.read_text(encoding="utf-8")
     marker = "<h2>Method notes</h2>"
     text = text.replace(marker, section + marker, 1) if marker in text else text + section
@@ -408,8 +518,11 @@ def run_pipeline(
     stage(3)
     cycle_angle_table(rows).to_csv(gait.out_dir / "joint_angles_cycle.csv", index=False)
     png = gait.out_dir / "joint_angles_cycle.png"
-    if plot_cycle_angles(rows, png):
-        add_angles_to_report(gait.report, png)
+    add_angles_to_report(
+        gait.report,
+        png if plot_cycle_angles(rows, png) else None,
+        angle_videos(gait.out_dir, gait.passes),
+    )
     stage(4)
     return gait
 
@@ -425,6 +538,7 @@ class ResultView:
     angles_png: Path | None
     report: Path
     out_dir: Path
+    videos: list[tuple[str, Path]] = field(default_factory=list)  # MP Angles videos
 
 
 def _summary_value(summary: pd.DataFrame, metric: str) -> float:
@@ -519,6 +633,7 @@ def build_result_view(
         png if png.is_file() else None,
         out_dir / "gait_report.html",
         out_dir,
+        angle_videos(out_dir, passes),
     )
 
 
@@ -945,7 +1060,7 @@ class GaitWizardApp:
         labels = (
             f"Detectar o corpo em {len(cameras)} câmera(s) — a parte mais demorada",
             "Encontrar os passos e as fases da marcha",
-            "Calcular os ângulos das articulações (MP Angles)",
+            "Calcular os ângulos e gerar o vídeo com os ângulos (MP Angles)",
             "Montar o relatório",
         )
         self.stage_labels = []
@@ -1113,6 +1228,15 @@ class GaitWizardApp:
 
         buttons = ttk.Frame(self.body, style="W.TFrame")
         buttons.pack(fill="x", pady=(10, 0))
+        # The skeleton + angles video is what patients and therapists look at
+        # first: the camera that saw complete walking passes gets the big button.
+        for k, (camera, video) in enumerate(view.videos):
+            ttk.Button(
+                buttons,
+                text=f"▶  Ver vídeo com ângulos ({camera})" if k == 0 else f"▶  Vídeo {camera}",
+                style="Big.TButton" if k == 0 else "Mid.TButton",
+                command=lambda v=video: open_path(v),
+            ).pack(side="left", padx=(0, 8))
         if view.report.is_file():
             ttk.Button(
                 buttons,

@@ -27,13 +27,17 @@ button per screen and no file dialogs or settings to understand:
    name/code and clicks **Analisar**. A checklist shows each stage in plain
    language with the elapsed time:
    MediaPipe pose → gait events and phases (`vaila/gait_auto.py` logic:
-   Zeni heel-strike / toe-off) → joint angles (**MP Angles**) → report.
+   Zeni heel-strike / toe-off) → joint angles and the **MP Angles video**
+   (skeleton + angles drawn over the person) → report.
 4. **Resultados** — big numbers (cadence, stance %, swing %, stride time,
    left/right symmetry) with one-line explanations, hip / knee / ankle angles
    over the gait cycle (mean ± SD per side, toe-off marked), and plain advice
    when the recording has problems (e.g. "the feet leave the bottom of the
-   image in 89 % of the time — move the camera back or tilt it down"). Buttons
-   open the full HTML report or the results folder.
+   image in 89 % of the time — move the camera back or tilt it down"). A big
+   **"▶ Ver vídeo com ângulos"** button plays the skeleton + angles video of
+   the camera that measured the walking (other cameras get smaller buttons);
+   other buttons open the full HTML report (which also embeds the videos) or
+   the results folder.
 
 Progress is saved in `<session>/assistente_marcha.json`: closing the program
 and opening the same session again offers its results directly.
@@ -50,11 +54,17 @@ gait_analysis_YYYYMMDD_HHMMSS/
     gait_summary.csv          means / SD per camera and side
     joint_angles_cycle.csv    angle mean / SD per % of the gait cycle
     joint_angles_cycle.png    hip / knee / ankle over the gait cycle
+    angles/angles_<video>.mp4 skeleton + angles video per camera (H.264)
     angles/                   MP Angles CSVs per camera (_rel, _abs_180, _abs_360)
     mediapipe/                MediaPipe outputs (CSVs, annotated video)
 ```
 
 ## 📐 Angles
+
+Before MP Angles, the landmarks are low-passed at 6 Hz (gaps filled, frames
+with nobody in view left empty), so the video and the angles are steady.
+MP Angles' own filter is not used: it turns a whole column into NaN when the
+person leaves the image even once.
 
 MP Angles relative angles are unsigned (0–180°). The knee is shown as
 **flexion** (180° − angle, 0° = straight leg); hip (trunk–thigh) and ankle

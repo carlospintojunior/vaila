@@ -166,3 +166,38 @@ def test_build_result_view_without_results(tmp_path):
     view = gw.build_result_view(tmp_path, {}, {})
     assert view.n_cycles == 0
     assert all(value == "–" for _, value, _ in view.cards)
+
+
+def test_smooth_landmarks_csv_keeps_empty_frames(tmp_path):
+    n = 90
+    x = 100 + 10 * np.sin(np.arange(n) / 5) + np.random.default_rng(0).normal(0, 2, n)
+    x[:20] = np.nan  # nobody in view
+    x[50] = np.nan  # one missed detection
+    src, dst = tmp_path / "v_pixel_vaila.csv", tmp_path / "v.csv"
+    pd.DataFrame({"frame": np.arange(n), "p0_x": x, "p0_y": x}).to_csv(src, index=False)
+    gw.smooth_landmarks_csv(src, dst, fs=30.0)
+    out = pd.read_csv(dst)
+    assert out["p0_x"][:20].isna().all()
+    assert out["p0_x"][20:].notna().sum() == n - 21
+    assert np.nanstd(np.diff(out["p0_x"][20:])) < np.nanstd(np.diff(x[20:]))
+
+
+def test_angle_videos_puts_cameras_with_passes_first(tmp_path):
+    angles = tmp_path / "angles"
+    angles.mkdir()
+    for name in ("angles_cam2_trial01.mp4", "angles_cam3_trial01.mp4"):
+        (angles / name).write_bytes(b"")
+    (angles / "cam2_trial01_rel.csv").write_text("")
+    videos = gw.angle_videos(tmp_path, {"cam2": 0, "cam3": 2})
+    assert [cam for cam, _ in videos] == ["cam3", "cam2"]
+    assert gw.angle_videos(tmp_path / "none") == []
+
+
+def test_add_angles_to_report_links_videos(tmp_path):
+    report = tmp_path / "gait_report.html"
+    report.write_text("<html><h2>Method notes</h2></html>", encoding="utf-8")
+    video = tmp_path / "angles" / "angles_cam2_trial01.mp4"
+    gw.add_angles_to_report(report, None, [("cam2", video)])
+    text = report.read_text(encoding="utf-8")
+    assert "src='angles/angles_cam2_trial01.mp4'" in text
+    assert text.index("cam2: skeleton") < text.index("Method notes")
