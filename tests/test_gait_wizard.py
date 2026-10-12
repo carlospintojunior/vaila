@@ -201,3 +201,19 @@ def test_add_angles_to_report_links_videos(tmp_path):
     text = report.read_text(encoding="utf-8")
     assert "src='angles/angles_cam2_trial01.mp4'" in text
     assert text.index("cam2: skeleton") < text.index("Method notes")
+
+
+def test_print_report_prefers_pdf_and_report_info(tmp_path):
+    assert gw.print_report(tmp_path, "pt") is None
+    (tmp_path / "relatorio_marcha.html").write_text("x")
+    assert gw.print_report(tmp_path, "pt").name == "relatorio_marcha.html"
+    (tmp_path / "relatorio_marcha.pdf").write_bytes(b"%PDF")
+    assert gw.print_report(tmp_path, "pt").name == "relatorio_marcha.pdf"
+    assert gw.print_report(tmp_path, "en") is None
+    info = gw.report_info({"participant": "P1", "age": "54", "affected_side": "left"}, "trial01")
+    assert (info.participant, info.age, info.affected_side, info.recording) == (
+        "P1",
+        "54",
+        "left",
+        "trial01",
+    )

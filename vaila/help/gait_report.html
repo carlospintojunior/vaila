@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>vailá - gait_report</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 40px;
+        line-height: 1.6;
+        background-color: #f5f5f5;
+      }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: white;
+        padding: 30px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        color: #2c3e50;
+        border-bottom: 3px solid #3498db;
+        padding-bottom: 10px;
+      }
+      h2 {
+        color: #34495e;
+        margin-top: 30px;
+      }
+      h3 {
+        color: #2c3e50;
+      }
+      .module-info {
+        background: #ecf0f1;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 20px 0;
+      }
+      .functions {
+        background: #f8f9fa;
+        padding: 15px;
+        border-left: 4px solid #28a745;
+        margin: 15px 0;
+      }
+      .docstring {
+        background: #fff3cd;
+        padding: 15px;
+        border-left: 4px solid #ffc107;
+        margin: 15px 0;
+      }
+      .cli-section {
+        background: #e8f4f8;
+        padding: 15px;
+        border-left: 4px solid #17a2b8;
+        margin: 15px 0;
+      }
+      .warning-section {
+        background: #fdecea;
+        padding: 15px;
+        border-left: 4px solid #e74c3c;
+        margin: 15px 0;
+      }
+      code {
+        background: #e9ecef;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-family: monospace;
+      }
+      pre {
+        background: #2d2d2d;
+        color: #f8f8f2;
+        padding: 15px;
+        border-radius: 5px;
+        overflow-x: auto;
+      }
+      .footer {
+        margin-top: 40px;
+        padding-top: 20px;
+        border-top: 1px solid #dee2e6;
+        color: #6c757d;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+<div class="container">
+<h1><i>vailá</i> - gait_report</h1>
+<h2>📋 Module Information</h2>
+<ul>
+<li><b>Category:</b> Tools</li>
+<li><b>File:</b> <code>vaila/gait_report.py</code></li>
+<li><b>Version:</b> 0.4.8</li>
+<li><b>GUI Interface:</b> ✅ Yes (built automatically by <b>Marcha Fácil</b>; button "Relatório para imprimir" on its results screen)</li>
+<li><b>CLI Interface:</b> ✅ Yes (<code>uv run python vaila/gait_report.py --analysis &lt;gait_analysis_dir&gt;</code>)</li>
+<li><b>Languages:</b> Portuguese and English</li>
+</ul>
+<h2>📖 Description</h2>
+<p>Builds a <b>printable gait report</b> (HTML + PDF) from a Marcha Fácil / <code>gait_auto</code> analysis folder.</p>
+<p><b>Page 1, for the patient and the therapist</b></p>
+<ul>
+<li>Identification: participant, age, affected side, therapist, institution, recording.</li>
+<li>A plain-language summary. Each parameter is compared with its reference range, with a short explanation when it is outside the range (e.g. "the foot stays on the floor longer (seeking stability)").</li>
+<li>Temporal parameters: cadence, stance, swing, double support, stride time, left/right difference and peak knee flexion in swing. Values outside the reference range are shown in bold and colour.</li>
+<li>Hip, knee and ankle angles over the gait cycle (mean ± SD per side).</li>
+<li>Four frames of the MP Angles video: heel strike, mid-stance, toe-off and mid-swing.</li>
+</ul>
+<p><b>Page 2, technical (for the therapist)</b></p>
+<ul>
+<li>Range of motion per joint and side, compared with references.</li>
+<li><b>MP Angles statistics split into Right / Left / Neck tables</b> instead of one 15-column table. Each table gives the mean, SD, minimum and maximum with the time they happen, range, between-cycle variability and the number of extreme points. The affected side is tagged.</li>
+<li><b>Points of extreme oscillation</b>, in bold red, with the time to check in the video:</li>
+<li><i>off pattern</i>: the angle departs from the mean of the person's <b>other</b> cycles, at the same % of the cycle, by more than 2.5 between-cycle SDs (and at least 10°). This needs at least 3 cycles of that side. The cycle under test is left out of its own reference, so an odd cycle cannot hide itself. A z-score over the whole walk is <b>not</b> used, because it flags the normal ~60° knee flexion of swing.</li>
+<li><i>abrupt change</i>: a frame-to-frame jump larger than max(15°, 6 × the median jump). This can be instability, compensation or a tracking error.</li>
+<li>Gait cycles, method and references.</li>
+</ul>
+<p><b>Screen-only appendix:</b> the frame-by-frame angle tables, split by side, with the extreme values highlighted. This section is not printed.</p>
+<p>The PDF is printed by a Chromium-based browser in headless mode (Chrome, Chromium or Edge). Without one, the HTML has a "Print / save PDF" button.</p>
+<h2>📁 Output (inside the analysis folder)</h2>
+<pre>relatorio_marcha.html / .pdf          Portuguese
+gait_report_print_en.html / .pdf      English</pre>
+<h2>📐 Reference ranges</h2>
+<p>These are approximate ranges around the mean values of healthy adults walking at a self-selected speed (Perry &amp; Burnfield 2010; symmetry index: Robinson et al. 1987):</p>
+<table><tr><th>Parameter</th><th>Range</th></tr><tr><td>Cadence</td><td>100–125 steps/min</td></tr><tr><td>Stance / swing</td><td>57–63 % / 37–43 % of the cycle</td></tr><tr><td>Double support</td><td>16–24 % of the cycle</td></tr><tr><td>Stride time</td><td>0.95–1.25 s</td></tr><tr><td>Left/right difference (stance)</td><td>≤ 10 %</td></tr><tr><td>Peak knee flexion in swing</td><td>55–65°</td></tr><tr><td>Range of motion: hip / knee / ankle</td><td>35–45° / 55–70° / 25–35°</td></tr></table>
+<p>Hip and ankle come from MP Angles' unsigned 2D angles (trunk–thigh, shank–foot), so their range of motion is an approximation.</p>
+<h2>💻 CLI</h2>
+<pre>uv run python vaila/gait_report.py --analysis &lt;gait_analysis_dir> \
+    [--lang pt en] [--participant ID] [--age 54] [--side right|left|both] \
+    [--therapist NAME] [--institution NAME] [--no-pdf]</pre>
+<h2>⚠️ Limitations</h2>
+<ul>
+<li>The report is generated to support an assessment. It does not replace clinical assessment.</li>
+<li>With fewer than 3 cycles per side, only abrupt changes are checked, and the report says so.</li>
+<li>2D angles in the camera plane, with no calibration.</li>
+</ul>
+<div class="footer"><p>📅 Updated: 12/10/2026</p><p>🔗 Part of <i>vailá</i> - Multimodal Toolbox</p>
+<p>🌐 <a href="https://github.com/vaila-multimodaltoolbox/vaila">GitHub Repository</a></p></div>
+</div>
+</body>
+</html>

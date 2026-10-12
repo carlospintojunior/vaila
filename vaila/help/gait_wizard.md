@@ -42,13 +42,24 @@ button per screen and no file dialogs or settings to understand:
 Progress is saved in `<session>/assistente_marcha.json`: closing the program
 and opening the same session again offers its results directly.
 
+## 🖨 Printable report (PT/EN)
+
+The processing step also asks for age, affected side, therapist, institution
+(both remembered) and the report language. At the end it writes a printable
+report (HTML + PDF, Portuguese and English) with a plain-language summary,
+parameters against reference ranges, angle statistics per side and the points
+of extreme oscillation. The results screen opens it with **"Relatório para
+imprimir"** (the other language is one click away). Details:
+[gait_report](gait_report.md).
+
 ## 📁 Output
 
 Inside the analysed folder (the cut folder, or the session if not cut):
 
 ```
 gait_analysis_YYYYMMDD_HHMMSS/
-    gait_report.html          full report (+ joint-angle section)
+    gait_report.html          full technical report (+ joint-angle section)
+    relatorio_marcha.html/.pdf, gait_report_print_en.html/.pdf   printable report (PT / EN)
     gait_events.csv           every heel-strike / toe-off
     gait_cycles.csv           one row per complete gait cycle
     gait_summary.csv          means / SD per camera and side

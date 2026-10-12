@@ -81,6 +81,32 @@ Hip and ankle values are the unsigned angles computed by MP Angles.
 cam2 found 3 cycles: cadence 126 steps/min, stance 52 %, swing 48 %, stride
 1.02 s. On cam3 the feet are cut off in 89 % of the frames.
 
+## Printable report (issue #2 on the fork, 2026-10-12)
+
+`vaila/gait_report.py` writes `relatorio_marcha.html/.pdf` (Portuguese) and
+`gait_report_print_en.html/.pdf` (English) into the analysis folder. Both
+languages plus their PDFs take ~7 s; the PDF is printed by headless Chromium.
+
+| Step | Screenshot |
+| --- | --- |
+| Processing: new report fields (age, affected side, therapist, institution, language) | ![](6_processamento_relatorio.png) |
+| Results: "Relatório para imprimir" + "English version" | ![](7_resultados_relatorio.png) |
+
+Checked on `trial01_20261010_095143` (2 cycles):
+- **Page 1** fits on one A4 sheet. It shows stance 67 % and double support
+  36 % flagged above range, and cadence 106 steps/min, stride 1.14 s and peak
+  knee flexion 65° within range.
+- **Page 2** has the statistics split Right / Left / Neck. There is 1 point
+  of extreme oscillation: an abrupt 16° ankle change at 3.47 s. Pattern
+  comparison was skipped (fewer than 3 cycles per side), and the report says
+  so.
+- **The first version flagged the normal ~60° knee swing peak as "very high".**
+  It used a z-score over the whole walk, and was replaced by a comparison with
+  the person's *other* cycles at the same % of the cycle (leave-one-out). A
+  unit test covers both behaviours.
+- The sample PDFs are **not** committed, because they contain frames of the
+  participant.
+
 ## Conclusions
 
 - The pipeline works end to end. After choosing the recording, the user only
