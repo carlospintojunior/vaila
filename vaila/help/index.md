@@ -8,7 +8,7 @@
 
 [Project documentation](../../docs/index.md) · [GitHub](https://github.com/vaila-multimodaltoolbox/vaila) · [README](../../README.md)
 
-**Documented topics:** 140 | **Categories:** 7 | **Generated on:** 12/10/2026 (v0.4.8)
+**Documented topics:** 141 | **Categories:** 7 | **Generated on:** 12/10/2026 (v0.4.8)
 
 This page lists every help topic under `vaila/help/` with links to HTML and Markdown.
 
@@ -161,7 +161,7 @@ This page lists every help topic under `vaila/help/` with links to HTML and Mark
 - **reid_markers** — Marker Re-identification Tool - reid_markers.py
   - [HTML](reid_markers.html) · [Markdown](reid_markers.md)
 
-## Tools (48)
+## Tools (49)
 
 - **ai_tracker_train** — Offline fine-tuning for vailá Track AI assets under vaila/models/ai_tracker/,
   - [HTML](ai_tracker_train.html) · [Markdown](ai_tracker_train.md)
@@ -195,6 +195,8 @@ This page lists every help topic under `vaila/help/` with links to HTML and Mark
   - [HTML](force_cmj.html) · [Markdown](force_cmj.md)
 - **force_cube_fig** — Force Platform Data Analysis Toolkit - force_cube_fig.py
   - [HTML](force_cube_fig.html) · [Markdown](force_cube_fig.md)
+- **gait_report** — Builds a printable gait report (HTML + PDF) from a Marcha Fácil / gait_auto
+  - [HTML](gait_report.html) · [Markdown](gait_report.md)
 - **gait_wizard** — Marcha Fácil is a step-by-step wizard for people with no computer
   - [HTML](gait_wizard.html) · [Markdown](gait_wizard.md)
 - **getpixelvideo** — The Pixel Coordinate Tool (getpixelvideo.py) is a comprehensive video annotation tool that allows you to mark and save pixel coordinates in video frames. Dev...

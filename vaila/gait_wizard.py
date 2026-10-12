@@ -82,6 +82,7 @@ try:
         analyze_session_full,
         symmetry_index,
     )
+    from .gait_report import ReportInfo, write_reports
     from .multicam_cut import discover_session_videos, read_frame_times
     from .multicam_recorder import load_config_value, save_config_value
 except ImportError:
@@ -93,6 +94,7 @@ except ImportError:
         analyze_session_full,
         symmetry_index,
     )
+    from gait_report import ReportInfo, write_reports  # ty: ignore[unresolved-import]
     from multicam_cut import (  # ty: ignore[unresolved-import]
         discover_session_videos,
         read_frame_times,
@@ -121,6 +123,8 @@ MIN_CYCLE_COVERAGE = 0.8  # fraction of a cycle's frames that must have angles
 ANGLE_LOWPASS_HZ = 6.0
 FEET_CUT_LIMIT = 0.3
 FEW_CYCLES = 3
+AFFECTED_SIDES = (("Nenhum", ""), ("Direito", "right"), ("Esquerdo", "left"), ("Ambos", "both"))
+REPORT_LANGS = (("Português", "pt"), ("English", "en"))
 
 
 # ── Sessions & saved progress ────────────────────────────────────────────────
@@ -503,8 +507,9 @@ def run_pipeline(
     participant: str,
     log: Callable[[str], None] = print,
     stage: Callable[[int], None] = lambda _i: None,
+    info: ReportInfo | None = None,
 ) -> GaitResult:
-    """MediaPipe -> gait events/phases -> joint angles -> report. ``stage(i)`` marks progress."""
+    """MediaPipe -> gait events/phases -> joint angles -> reports. ``stage(i)`` marks progress."""
 
     def gait_log(msg: str) -> None:
         log(msg)
@@ -523,8 +528,36 @@ def run_pipeline(
         png if plot_cycle_angles(rows, png) else None,
         angle_videos(gait.out_dir, gait.passes),
     )
+    try:
+        write_reports(gait.out_dir, info or ReportInfo(participant=participant))
+    except Exception as exc:  # noqa: BLE001 - the analysis itself is done; report can be redone
+        log(f"Printable report failed: {type(exc).__name__}: {exc}")
     stage(4)
     return gait
+
+
+def print_report(out_dir: Path, lang: str) -> Path | None:
+    """The printable report in ``lang``: the PDF when there is one, else the HTML."""
+    try:
+        from .gait_report import REPORT_NAMES
+    except ImportError:
+        from gait_report import REPORT_NAMES  # ty: ignore[unresolved-import]
+    for suffix in (".pdf", ".html"):
+        path = Path(out_dir) / f"{REPORT_NAMES[lang]}{suffix}"
+        if path.is_file():
+            return path
+    return None
+
+
+def report_info(state: dict, recording: str = "") -> ReportInfo:
+    return ReportInfo(
+        participant=state.get("participant", ""),
+        age=state.get("age", ""),
+        affected_side=state.get("affected_side", ""),
+        therapist=state.get("therapist", ""),
+        institution=state.get("institution", ""),
+        recording=recording,
+    )
 
 
 # ── Plain-language summary of a finished analysis ────────────────────────────
@@ -1002,15 +1035,48 @@ class GaitWizardApp:
         available = [camera_name(v) for v in videos]
         chosen = self.session.state.get("cameras") or default_lateral_cameras(available)
 
+        state = self.session.state
         form = ttk.Frame(self.body, style="W.TFrame")
-        form.pack(fill="x")
-        ttk.Label(form, text="Nome ou código do participante (opcional):", style="W.TLabel").pack(
-            anchor="w"
+        form.pack(fill="x", pady=(0, 10))
+        self.participant_var = tk.StringVar(value=state.get("participant", ""))
+        self.age_var = tk.StringVar(value=state.get("age", ""))
+        side_label = {v: k for k, v in AFFECTED_SIDES}.get(state.get("affected_side", ""))
+        self.side_var = tk.StringVar(value=side_label or AFFECTED_SIDES[0][0])
+        self.therapist_var = tk.StringVar(
+            value=state.get("therapist") or load_config_value(CONFIG_SECTION, "therapist")
         )
-        self.participant_var = tk.StringVar(value=self.session.state.get("participant", ""))
-        entry = ttk.Entry(form, textvariable=self.participant_var, width=40, font=(FONT, 12))
-        entry.pack(anchor="w", pady=(2, 12))
-        self._process_inputs: list[ttk.Entry | ttk.Checkbutton] = [entry]
+        self.institution_var = tk.StringVar(
+            value=state.get("institution") or load_config_value(CONFIG_SECTION, "institution")
+        )
+        lang = state.get("report_lang") or load_config_value(CONFIG_SECTION, "report_lang") or "pt"
+        self.lang_var = tk.StringVar(value={v: k for k, v in REPORT_LANGS}.get(lang, "Português"))
+        self._process_inputs: list[ttk.Entry | ttk.Checkbutton | ttk.Combobox] = []
+        fields = (
+            ("Participante (nome ou código)", ttk.Entry, self.participant_var, None, 30),
+            ("Idade", ttk.Entry, self.age_var, None, 6),
+            ("Lado acometido", ttk.Combobox, self.side_var, [k for k, _ in AFFECTED_SIDES], 12),
+            ("Idioma do relatório", ttk.Combobox, self.lang_var, [k for k, _ in REPORT_LANGS], 12),
+            ("Terapeuta", ttk.Entry, self.therapist_var, None, 30),
+            ("Instituição", ttk.Entry, self.institution_var, None, 30),
+        )
+        for i, (label, kind, var, values, width) in enumerate(fields):
+            row, col = divmod(i, 2)
+            ttk.Label(form, text=label, style="W.TLabel").grid(
+                row=row, column=2 * col, sticky="w", padx=(0 if col == 0 else 24, 8), pady=3
+            )
+            if kind is ttk.Combobox:
+                widget = ttk.Combobox(
+                    form,
+                    textvariable=var,
+                    values=values or [],
+                    width=width,
+                    state="readonly",
+                    font=(FONT, 11),
+                )
+            else:
+                widget = ttk.Entry(form, textvariable=var, width=width, font=(FONT, 11))
+            widget.grid(row=row, column=2 * col + 1, sticky="w", pady=3)
+            self._process_inputs.append(widget)
 
         cams = ttk.Frame(self.body, style="W.TFrame")
         cams.pack(fill="x")
@@ -1050,10 +1116,21 @@ class GaitWizardApp:
             return
         participant = self.participant_var.get().strip()
         save_config_value(CONFIG_SECTION, "lateral_cameras", ",".join(cameras))
+        fields = {
+            "participant": participant,
+            "age": self.age_var.get().strip(),
+            "affected_side": dict(AFFECTED_SIDES).get(self.side_var.get(), ""),
+            "therapist": self.therapist_var.get().strip(),
+            "institution": self.institution_var.get().strip(),
+            "report_lang": dict(REPORT_LANGS).get(self.lang_var.get(), "pt"),
+        }
+        for key in ("therapist", "institution", "report_lang"):
+            save_config_value(CONFIG_SECTION, key, fields[key])
         state = load_state(self.session.path)
-        state.update(cameras=cameras, participant=participant, source_dir=str(self.source_dir))
+        state.update(cameras=cameras, source_dir=str(self.source_dir), **fields)
         save_state(self.session.path, state)
         self.session.state = state
+        info = report_info(state, self.session.name)
 
         for w in self.progress_frame.winfo_children():
             w.destroy()
@@ -1061,7 +1138,7 @@ class GaitWizardApp:
             f"Detectar o corpo em {len(cameras)} câmera(s) — a parte mais demorada",
             "Encontrar os passos e as fases da marcha",
             "Calcular os ângulos e gerar o vídeo com os ângulos (MP Angles)",
-            "Montar o relatório",
+            "Montar o relatório para imprimir (PDF)",
         )
         self.stage_labels = []
         for text in labels:
@@ -1092,6 +1169,7 @@ class GaitWizardApp:
                     participant,
                     log=lambda m: self._events.put(("log", m)),
                     stage=lambda i: self._events.put(("stage", i)),
+                    info=info,
                 )
                 self._events.put(("done", gait))
             except Exception as exc:  # noqa: BLE001 - shown to the user
@@ -1221,36 +1299,72 @@ class GaitWizardApp:
             from PIL import Image, ImageTk
 
             image = Image.open(view.angles_png)
-            image.thumbnail((900, 280))
+            image.thumbnail((900, 200))
             photo = ImageTk.PhotoImage(image, master=self.window)
             self._images.append(photo)
             ttk.Label(self.body, image=photo, style="W.TLabel").pack(anchor="w", pady=(8, 0))
 
-        buttons = ttk.Frame(self.body, style="W.TFrame")
-        buttons.pack(fill="x", pady=(10, 0))
+        main_row = ttk.Frame(self.body, style="W.TFrame")
+        main_row.pack(fill="x", pady=(10, 0))
+        more_row = ttk.Frame(self.body, style="W.TFrame")
+        more_row.pack(fill="x", pady=(6, 0))
         # The skeleton + angles video is what patients and therapists look at
         # first: the camera that saw complete walking passes gets the big button.
         for k, (camera, video) in enumerate(view.videos):
             ttk.Button(
-                buttons,
+                main_row if k == 0 else more_row,
                 text=f"▶  Ver vídeo com ângulos ({camera})" if k == 0 else f"▶  Vídeo {camera}",
                 style="Big.TButton" if k == 0 else "Mid.TButton",
                 command=lambda v=video: open_path(v),
             ).pack(side="left", padx=(0, 8))
+        lang = state.get("report_lang") or "pt"
+        other = "en" if lang == "pt" else "pt"
+        ttk.Button(
+            main_row,
+            text="Relatório para imprimir" if lang == "pt" else "Printable report",
+            style="Big.TButton",
+            command=lambda: self._open_print_report(out_dir, lang),
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            more_row,
+            text="English version" if other == "en" else "Versão em português",
+            style="Mid.TButton",
+            command=lambda: self._open_print_report(out_dir, other),
+        ).pack(side="left", padx=(0, 8))
         if view.report.is_file():
             ttk.Button(
-                buttons,
-                text="Abrir relatório completo",
+                more_row,
+                text="Relatório técnico (HTML)",
                 style="Mid.TButton",
                 command=lambda: open_path(view.report),
             ).pack(side="left", padx=(0, 8))
         ttk.Button(
-            buttons,
+            more_row,
             text="Abrir pasta dos resultados",
             style="Mid.TButton",
             command=lambda: open_path(view.out_dir),
         ).pack(side="left", padx=(0, 8))
         self.next_btn.config(text="Analisar outra gravação", command=self._restart)
+
+    def _open_print_report(self, out_dir: Path, lang: str) -> None:
+        """Open the printable report, building it first for analyses made before it existed."""
+        path = print_report(out_dir, lang)
+        if path is None and self.session is not None:
+            self.window.config(cursor="watch")
+            self.window.update_idletasks()
+            try:
+                write_reports(out_dir, report_info(self.session.state, self.session.name))
+            except Exception as exc:  # noqa: BLE001 - shown to the user
+                messagebox.showerror(
+                    "Marcha Fácil",
+                    f"Não foi possível montar o relatório:\n{exc}",
+                    parent=self.window,
+                )
+            finally:
+                self.window.config(cursor="")
+            path = print_report(out_dir, lang)
+        if path is not None:
+            open_path(path)
 
     def _restart(self) -> None:
         self.source_dir = None
