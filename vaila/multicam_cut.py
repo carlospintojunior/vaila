@@ -7,7 +7,7 @@ Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 26 September 2026
 Update Date: 12 October 2026
-Version: 0.4.5
+Version: 0.4.8
 
 Description:
 Cuts every video of a multi-camera session (e.g. a folder written by

@@ -4,7 +4,7 @@
 
 - **Category:** Tools
 - **File:** `vaila/multicam_cut.py`
-- **Version:** 0.4.5
+- **Version:** 0.4.8
 - **GUI Interface:** ✅ Yes
 - **CLI Interface:** ⚠️ Partial (`uv run python vaila/multicam_cut.py [session_dir]` opens the GUI on that folder)
 
@@ -104,6 +104,6 @@ span; cameras at different frame rates have different frame counts.
 
 ---
 
-📅 **Updated:** 26/09/2026
+📅 **Updated:** 12/10/2026
 🔗 **Part of *vailá* - Multimodal Toolbox**
 🌐 [GitHub Repository](https://github.com/vaila-multimodaltoolbox/vaila)
