@@ -61,6 +61,10 @@ MP Angles relative angles are unsigned (0–180°). The knee is shown as
 (shank–foot) are shown as computed by MP Angles. In a side view the leg
 farther from the camera is partly hidden, so its curve is less reliable.
 
+## 🧪 Test record
+
+Screenshots and results of the first real-data test: [`docs/gait_wizard/README.md`](../../docs/gait_wizard/README.md).
+
 ## ⚠️ Known Limitations (v1)
 
 - Only temporal parameters and 2D sagittal angles; no calibration, no
