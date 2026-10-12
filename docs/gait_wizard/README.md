@@ -29,7 +29,8 @@ entry "TAREFA 1b".
 | 2 Corte: cut, reuse a previous cut, or use the whole video | ![](2_corte.png) |
 | 2 (Cut Cameras opened by the wizard with the session already loaded) | ![](2b_cut_cameras.png) |
 | 3 Processamento: running (plain-language checklist, elapsed time) | ![](3_processamento.png) |
-| 4 Resultados | ![](4_resultados.png) |
+| 4 Resultados (the big button plays the MP Angles video) | ![](4_resultados.png) |
+| MP Angles video (frame), opened from the results screen | ![](5_video_mp_angles.jpg) |
 
 ## End-to-end result (`trial01_20261010_095143`, cut 1–15 s)
 
@@ -37,6 +38,7 @@ entry "TAREFA 1b".
 | --- | --- |
 | Cut, 3 cameras re-encoded with H.264 on the CPU | ~70 s |
 | MediaPipe (2 lateral cameras) + gait events + MP Angles + report | ~100 s |
+| Same, including the MP Angles videos (full `run_pipeline`, rerun after adding the video) | 2 min 37 s |
 
 **Gait events and phases (cam2):** 2 passes and 2 complete cycles (1 left,
 1 right).
@@ -54,6 +56,14 @@ The wizard showed: cadence 106 steps/min, stance 67 %, swing 33 %, stride
 **Joint angles (MP Angles) over the gait cycle:**
 
 ![](joint_angles_cycle.png)
+
+**MP Angles video** (added the same day, at the user's request, because it is
+what catches the attention of therapists and patients): a skeleton and joint
+angles drawn over the person for every lateral camera
+(`angles/angles_<video>.mp4`, H.264 1280x720, 423 frames for cam2). Rendering
+and re-encoding both cameras took **~35 s** on this laptop. The landmarks are
+low-passed at 6 Hz before MP Angles, so the drawing is steady (frames with
+nobody in view stay empty).
 
 The knee flexion curve has the typical gait shape: a small loading-response
 peak (~10–15° at 10–20 % of the cycle) and the swing peak (~65° at ~78 %).
