@@ -4,7 +4,7 @@
 
 - **Category:** Tools
 - **File:** `vaila/multicam_recorder.py`
-- **Version:** 0.4.5
+- **Version:** 0.4.8
 - **GUI Interface:** ✅ Yes
 - **CLI Interface:** ❌ No (GUI only; prints an equivalent CLI command per camera)
 
@@ -70,6 +70,6 @@ uv run python vaila/multicam_recorder.py
 
 ---
 
-📅 **Updated:** 10/10/2026
+📅 **Updated:** 12/10/2026
 🔗 **Part of vailá - Multimodal Toolbox**
 🌐 [GitHub Repository](https://github.com/vaila-multimodaltoolbox/vaila)

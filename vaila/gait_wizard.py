@@ -7,7 +7,7 @@ Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 12 October 2026
 Update Date: 12 October 2026
-Version: 0.4.5
+Version: 0.4.8
 
 Description:
 A step-by-step wizard (UI in Portuguese) that takes a user with no computer

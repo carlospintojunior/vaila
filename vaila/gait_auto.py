@@ -7,7 +7,7 @@ Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 10 October 2026
 Update Date: 12 October 2026
-Version: 0.4.5
+Version: 0.4.8
 
 Description:
 Turns a "Record Cameras" session of people walking past side-view (sagittal)

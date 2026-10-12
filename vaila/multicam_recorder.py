@@ -6,8 +6,8 @@ Author: Carlos Pinto Jr
 Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 26 September 2026
-Update Date: 10 October 2026
-Version: 0.4.5
+Update Date: 12 October 2026
+Version: 0.4.8
 
 Description:
 Records video from multiple detected cameras simultaneously, through a simple

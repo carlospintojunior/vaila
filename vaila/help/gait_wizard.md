@@ -4,7 +4,7 @@
 
 - **Category:** Tools
 - **File:** `vaila/gait_wizard.py`
-- **Version:** 0.4.5
+- **Version:** 0.4.8
 - **GUI Interface:** ✅ Yes (button **Marcha Fácil**, `C_B_r6_c3`)
 - **CLI Interface:** ⚠️ Partial (`uv run python vaila/gait_wizard.py [sessions_root]` opens the GUI on that folder)
 - **Language:** the wizard's screens are in **Portuguese** (first version)
