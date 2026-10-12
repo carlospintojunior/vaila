@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>vailá - gait_wizard</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 40px;
+        line-height: 1.6;
+        background-color: #f5f5f5;
+      }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: white;
+        padding: 30px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        color: #2c3e50;
+        border-bottom: 3px solid #3498db;
+        padding-bottom: 10px;
+      }
+      h2 {
+        color: #34495e;
+        margin-top: 30px;
+      }
+      h3 {
+        color: #2c3e50;
+      }
+      .module-info {
+        background: #ecf0f1;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 20px 0;
+      }
+      .functions {
+        background: #f8f9fa;
+        padding: 15px;
+        border-left: 4px solid #28a745;
+        margin: 15px 0;
+      }
+      .docstring {
+        background: #fff3cd;
+        padding: 15px;
+        border-left: 4px solid #ffc107;
+        margin: 15px 0;
+      }
+      .cli-section {
+        background: #e8f4f8;
+        padding: 15px;
+        border-left: 4px solid #17a2b8;
+        margin: 15px 0;
+      }
+      .warning-section {
+        background: #fdecea;
+        padding: 15px;
+        border-left: 4px solid #e74c3c;
+        margin: 15px 0;
+      }
+      code {
+        background: #e9ecef;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-family: monospace;
+      }
+      pre {
+        background: #2d2d2d;
+        color: #f8f8f2;
+        padding: 15px;
+        border-radius: 5px;
+        overflow-x: auto;
+      }
+      .footer {
+        margin-top: 40px;
+        padding-top: 20px;
+        border-top: 1px solid #dee2e6;
+        color: #6c757d;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1><i>vailá</i> - gait_wizard (Marcha Fácil)</h1>
+
+      <div class="module-info">
+        <h3>📋 Module Information</h3>
+        <p><strong>Category:</strong> Tools</p>
+        <p><strong>File:</strong> vaila/gait_wizard.py</p>
+        <p><strong>Version:</strong> 0.4.5</p>
+        <p><strong>GUI Interface:</strong> ✅ Yes (button <b>Marcha Fácil</b>, <code>C_B_r6_c3</code>)</p>
+        <p><strong>CLI Interface:</strong> ⚠️ Partial (<code>uv run python vaila/gait_wizard.py [sessions_root]</code> opens the GUI on that folder)</p>
+        <p><strong>Language:</strong> the wizard's screens are in <b>Portuguese</b> (first version)</p>
+      </div>
+
+      <h2>📖 Description</h2>
+      <p><b>Marcha Fácil</b> is a step-by-step wizard for people with no computer
+      background. It takes a <b>Record Cameras</b> session to gait results with one big
+      button per screen and no file dialogs or settings to understand:</p>
+      <ol>
+        <li><b>Captura</b> — recording from inside the wizard is planned ("em breve"). For
+        now the user picks an existing session from a list showing date, time, number of
+        cameras, status (Nova / Cortada / Analisada) and a preview image of every camera.</li>
+        <li><b>Corte</b> — <b>Cut Cameras</b> opens with the session already loaded; when the
+        cut finishes, the wizard moves on by itself. The user can also reuse a previous cut
+        or analyse the whole video.</li>
+        <li><b>Processamento</b> — the user ticks the cameras that see the person <b>from the
+        side</b> (remembered for next time), optionally types a participant name/code and
+        clicks <b>Analisar</b>. A checklist shows each stage in plain language with the
+        elapsed time: MediaPipe pose → gait events and phases (<code>vaila/gait_auto.py</code>
+        logic: Zeni heel-strike / toe-off) → joint angles (<b>MP Angles</b>) → report.</li>
+        <li><b>Resultados</b> — big numbers (cadence, stance %, swing %, stride time,
+        left/right symmetry) with one-line explanations, hip / knee / ankle angles over the
+        gait cycle (mean ± SD per side, toe-off marked), and plain advice when the recording
+        has problems (e.g. "the feet leave the bottom of the image in 89 % of the time —
+        move the camera back or tilt it down"). Buttons open the full HTML report or the
+        results folder.</li>
+      </ol>
+      <p>Progress is saved in <code>&lt;session&gt;/assistente_marcha.json</code>: closing
+      the program and opening the same session again offers its results directly.</p>
+
+      <h2>📁 Output</h2>
+      <p>Inside the analysed folder (the cut folder, or the session if not cut):</p>
+      <pre>gait_analysis_YYYYMMDD_HHMMSS/
+    gait_report.html          full report (+ joint-angle section)
+    gait_events.csv           every heel-strike / toe-off
+    gait_cycles.csv           one row per complete gait cycle
+    gait_summary.csv          means / SD per camera and side
+    joint_angles_cycle.csv    angle mean / SD per % of the gait cycle
+    joint_angles_cycle.png    hip / knee / ankle over the gait cycle
+    angles/                   MP Angles CSVs per camera (_rel, _abs_180, _abs_360)
+    mediapipe/                MediaPipe outputs (CSVs, annotated video)</pre>
+
+      <h2>📐 Angles</h2>
+      <p>MP Angles relative angles are unsigned (0–180°). The knee is shown as
+      <b>flexion</b> (180° − angle, 0° = straight leg); hip (trunk–thigh) and ankle
+      (shank–foot) are shown as computed by MP Angles. In a side view the leg farther from
+      the camera is partly hidden, so its curve is less reliable.</p>
+
+      <div class="warning-section">
+        <h3>⚠️ Known Limitations (v1)</h3>
+        <ul>
+          <li>Only temporal parameters and 2D sagittal angles; no calibration, no distances or speeds.</li>
+          <li>Results need lateral cameras that show the <b>whole body including the feet</b> and several crossings (aim for ≥ 10 gait cycles).</li>
+          <li>MediaPipe runs on the CPU: a few minutes per short session on a laptop.</li>
+          <li>Closing the wizard during processing abandons that analysis.</li>
+          <li>Screens are in Portuguese only; the full HTML report is still in English.</li>
+        </ul>
+      </div>
+
+      <div class="footer">
+        <p>📅 Updated: 12/10/2026</p>
+        <p>🔗 Part of <i>vailá</i> - Multimodal Toolbox</p>
+        <p>
+          🌐
+          <a href="https://github.com/vaila-multimodaltoolbox/vaila"
+            >GitHub Repository</a
+          >
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

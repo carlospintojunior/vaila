@@ -6,7 +6,7 @@ Author: Carlos Pinto Jr
 Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 26 September 2026
-Update Date: 26 September 2026
+Update Date: 12 October 2026
 Version: 0.4.5
 
 Description:
@@ -657,8 +657,16 @@ class RangeTimeline(tk.Canvas):
 class MulticamCutApp:
     """Tk control window + cv2 mosaic of every camera in a session."""
 
-    def __init__(self, window: tk.Toplevel, session_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        window: tk.Toplevel,
+        session_dir: str | None = None,
+        on_cut_done: Callable[[Path], None] | None = None,
+    ) -> None:
         self.window = window
+        # Called with the output folder after a successful cut (the window then
+        # closes by itself) -- used by the Gait Wizard to move to the next step.
+        self.on_cut_done = on_cut_done
         self.window.title("vailá - Cut Cameras")
         self.session_dir_var = tk.StringVar(
             value=session_dir or load_config_value("multicam_cut", "last_session_dir")
@@ -1095,6 +1103,11 @@ class MulticamCutApp:
         self.cutting = False
         self._set_inputs_enabled(True)
         self.cut_btn.config(text="Cut all cameras")
+        if ok and self.on_cut_done is not None:
+            callback = self.on_cut_done
+            self.on_close()
+            callback(out_dir)
+            return
         if ok:
             self.status_var.set(f"Done: {len(written)} videos in {out_dir}")
             summary = "\n".join(p.name for p in written)
@@ -1143,9 +1156,15 @@ class MulticamCutApp:
 
 
 def run_multicam_cut(
-    parent: tk.Tk | tk.Toplevel | None = None, session_dir: str | None = None
-) -> None:
-    """Open the synchronized multi-camera cut tool."""
+    parent: tk.Tk | tk.Toplevel | None = None,
+    session_dir: str | None = None,
+    on_cut_done: Callable[[Path], None] | None = None,
+) -> MulticamCutApp:
+    """Open the synchronized multi-camera cut tool.
+
+    ``on_cut_done(out_dir)`` (optional) is called after a successful cut and
+    the tool's window closes by itself.
+    """
     print(f"Running script: {Path(__file__).name}")
     print(f"Script directory: {Path(__file__).parent}")
     print("Starting multicam_cut...")
@@ -1159,11 +1178,12 @@ def run_multicam_cut(
         created_root = True
 
     window = tk.Toplevel(root)
-    MulticamCutApp(window, session_dir=session_dir)
+    app = MulticamCutApp(window, session_dir=session_dir, on_cut_done=on_cut_done)
 
     if created_root:
         window.bind("<Destroy>", lambda e: root.quit() if e.widget is window else None)
         root.mainloop()
+    return app
 
 
 if __name__ == "__main__":

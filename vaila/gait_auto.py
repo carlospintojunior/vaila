@@ -6,7 +6,7 @@ Author: Carlos Pinto Jr
 Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 10 October 2026
-Update Date: 10 October 2026
+Update Date: 12 October 2026
 Version: 0.4.5
 
 Description:
@@ -150,6 +150,19 @@ class GaitEvent:
     kind: str  # "HS" | "TO"
     frame: float  # sub-frame position
     time: float  # seconds
+
+
+@dataclass
+class GaitResult:
+    report: Path
+    out_dir: Path
+    mediapipe_run: Path
+    videos: list[Path]
+    cycles: pd.DataFrame
+    summary: pd.DataFrame
+    passes: dict[str, int]  # camera -> valid walking passes
+    feet_cut: dict[str, float]  # camera -> fraction of person frames with feet cut off
+    warnings: list[str]
 
 
 # ── MediaPipe stage ──────────────────────────────────────────────────────────
@@ -695,6 +708,17 @@ def analyze_session(
     log: Callable[[str], None] = print,
 ) -> Path:
     """Run the full pipeline on one session; return the HTML report path."""
+    return analyze_session_full(session_dir, cameras, participant, mediapipe_dir, log).report
+
+
+def analyze_session_full(
+    session_dir: Path,
+    cameras: list[str] | None = None,
+    participant: str = "",
+    mediapipe_dir: Path | None = None,
+    log: Callable[[str], None] = print,
+) -> GaitResult:
+    """Run the full pipeline on one session; return the report path and the data."""
     session_dir = Path(session_dir).resolve()
     cameras = list(cameras or DEFAULT_CAMERAS)
     out_dir = session_dir / f"gait_analysis_{datetime.now():%Y%m%d_%H%M%S}"
@@ -722,10 +746,13 @@ def analyze_session(
         f"{STRIDE_RANGE_S[0]}–{STRIDE_RANGE_S[1]} s.",
     ]
     warnings: list[str] = []
+    n_passes: dict[str, int] = {}
+    feet_cut: dict[str, float] = {}
     for video in videos:
         name = video.stem.split("_")[0]
         cam = load_camera(name, video, run)
         cut = feet_cut_fraction(cam)
+        feet_cut[name] = cut
         if np.isfinite(cut) and cut > 0.3:
             msg = (
                 f"{name}: the feet are below the bottom of the image in {100 * cut:.0f} % "
@@ -735,6 +762,7 @@ def analyze_session(
             warnings.append(msg)
             log(f"WARNING {msg}")
         passes = segment_passes(cam)
+        n_passes[name] = len(passes)
         fps = 1 / float(np.median(np.diff(cam.times))) if len(cam.times) > 1 else float("nan")
         log(f"{name}: {len(passes)} walking pass(es), {fps:.2f} fps")
         notes.append(f"{name}: {cam.width}x{cam.height} @ {fps:.2f} fps, {len(passes)} pass(es).")
@@ -771,7 +799,9 @@ def analyze_session(
         encoding="utf-8",
     )
     log(f"{len(cycles_df)} complete gait cycle(s). Report: {report}")
-    return report
+    return GaitResult(
+        report, out_dir, run, videos, cycles_df, summary, n_passes, feet_cut, warnings
+    )
 
 
 # ── Progress window (when launched from Record Cameras) ──────────────────────

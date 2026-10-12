@@ -1,0 +1,168 @@
+"""Tests for vaila/gait_wizard.py (non-GUI helpers)."""
+
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from vaila import gait_wizard as gw
+
+
+def _touch_session(folder: Path, cameras=("cam1", "cam2", "cam3")) -> Path:
+    folder.mkdir(parents=True)
+    for cam in cameras:
+        (folder / f"{cam}_trial01.mp4").write_bytes(b"")
+    return folder
+
+
+def test_session_datetime_from_folder_name(tmp_path):
+    folder = tmp_path / "trial01_20261010_094738"
+    folder.mkdir()
+    assert gw.session_datetime(folder) == datetime(2026, 10, 10, 9, 47, 38)
+
+
+def test_find_sessions_newest_first_and_skips_outputs(tmp_path):
+    _touch_session(tmp_path / "trial01_20261010_083159")
+    newer = _touch_session(tmp_path / "trial01_20261010_095143")
+    _touch_session(tmp_path / "processed_multicam_cut_20261012_101010")
+    (tmp_path / "empty_folder").mkdir()
+    sessions = gw.find_sessions(tmp_path)
+    assert [s.name for s in sessions] == ["trial01_20261010_095143", "trial01_20261010_083159"]
+    assert sessions[0].path == newer
+    assert sessions[0].cameras == ["cam1", "cam2", "cam3"]
+    assert sessions[0].status == "Nova"
+
+
+def test_find_sessions_missing_root(tmp_path):
+    assert gw.find_sessions(tmp_path / "nope") == []
+
+
+def test_state_roundtrip_and_status(tmp_path):
+    session = _touch_session(tmp_path / "trial01_20261010_094738")
+    cut = _touch_session(session / "processed_multicam_cut_20261012_101010")
+    gw.save_state(session, {"source_dir": str(cut), "cut_dir": str(cut), "participant": "João"})
+    state = gw.load_state(session)
+    assert state["participant"] == "João" and "updated" in state
+    info = gw.find_sessions(tmp_path)[0]
+    assert info.status == "Cortada"
+    assert gw.latest_cut_dir(session) == cut
+    analysis = session / "gait_analysis_x"
+    analysis.mkdir()
+    gw.save_state(session, {**state, "analysis_dir": str(analysis)})
+    assert gw.find_sessions(tmp_path)[0].status == "Analisada"
+
+
+def test_load_state_missing_or_corrupt(tmp_path):
+    assert gw.load_state(tmp_path) == {}
+    (tmp_path / gw.STATE_FILE).write_text("{not json", encoding="utf-8")
+    assert gw.load_state(tmp_path) == {}
+
+
+def test_camera_name_from_cut_file():
+    assert gw.camera_name(Path("cam2_trial01_frame_10_to_500.mp4")) == "cam2"
+
+
+def test_normalize_cycles_resamples_and_converts_knee():
+    fs = 30.0
+    n = 120
+    times = np.arange(n) / fs
+    # Knee included angle 180 - 30*sin: flexion should come back as 30*sin.
+    phase = np.sin(2 * np.pi * times / 1.0)
+    angles = pd.DataFrame(
+        {
+            "frame": np.arange(n),
+            "left_knee": 180.0 - 30.0 * np.abs(phase),
+            "left_hip": np.full(n, 170.0),
+            "left_ankle": np.full(n, 90.0),
+        }
+    )
+    cycles = pd.DataFrame(
+        [
+            {
+                "camera": "cam2",
+                "side": "left",
+                "hs_time_s": 1.0,
+                "next_hs_time_s": 2.0,
+                "stance_pct": 60.0,
+            },
+            {
+                "camera": "cam3",
+                "side": "left",
+                "hs_time_s": 1.0,
+                "next_hs_time_s": 2.0,
+                "stance_pct": 60.0,
+            },
+        ]
+    )
+    rows = gw.normalize_cycles(angles, times, cycles, "cam2")
+    assert {r["joint"] for r in rows} == {"hip", "knee", "ankle"}
+    knee = next(r for r in rows if r["joint"] == "knee")["curve"]
+    assert knee.shape == (gw.CYCLE_POINTS,)
+    assert knee.min() >= -2 and knee.max() == pytest.approx(30, abs=3)
+    hip = next(r for r in rows if r["joint"] == "hip")["curve"]
+    assert np.allclose(hip, 170.0, atol=0.5)
+
+    table = gw.cycle_angle_table(rows)
+    assert set(table["joint"]) == {"hip", "knee", "ankle"}
+    assert (table["n_cycles"] == 1).all()
+
+
+def test_normalize_cycles_drops_cycle_without_data():
+    times = np.arange(60) / 30.0
+    angles = pd.DataFrame({"frame": np.arange(60), "right_knee": np.full(60, np.nan)})
+    cycles = pd.DataFrame(
+        [
+            {
+                "camera": "cam2",
+                "side": "right",
+                "hs_time_s": 0.2,
+                "next_hs_time_s": 1.5,
+                "stance_pct": 60.0,
+            }
+        ]
+    )
+    assert gw.normalize_cycles(angles, times, cycles, "cam2") == []
+
+
+def test_recording_advice():
+    advice = gw.recording_advice(0, {"cam2": 1, "cam3": 0}, {"cam2": 0.05, "cam3": 0.89})
+    text = "\n".join(advice)
+    assert "cam3" in text and "89%" in text
+    assert "nenhum ciclo" in text
+    assert "cam2" not in text
+    assert gw.recording_advice(12, {"cam2": 3}, {"cam2": 0.0}) == []
+    assert "indicativos" in gw.recording_advice(2, {"cam2": 1}, {"cam2": float("nan")})[0]
+
+
+def test_build_result_view_reads_summary(tmp_path):
+    summary = pd.DataFrame(
+        [
+            {"camera": "all", "side": "left", "n_cycles": 2, "stance_pct_mean": 62.0},
+            {"camera": "all", "side": "right", "n_cycles": 2, "stance_pct_mean": 58.0},
+            {
+                "camera": "all",
+                "side": "both",
+                "n_cycles": 4,
+                "cadence_steps_min_mean": 110.4,
+                "stance_pct_mean": 60.0,
+                "swing_pct_mean": 40.0,
+                "stride_time_s_mean": 1.087,
+            },
+        ]
+    )
+    summary.to_csv(tmp_path / "gait_summary.csv", index=False)
+    view = gw.build_result_view(tmp_path, {"cam2": 2}, {"cam2": 0.0})
+    values = {title: value for title, value, _ in view.cards}
+    assert view.n_cycles == 4
+    assert values["Cadência"] == "110 passos/min"
+    assert values["Tempo da passada"] == "1,09 s"
+    assert values["Simetria E/D"] == "7%"
+    assert view.angles_png is None
+
+
+def test_build_result_view_without_results(tmp_path):
+    view = gw.build_result_view(tmp_path, {}, {})
+    assert view.n_cycles == 0
+    assert all(value == "–" for _, value, _ in view.cards)

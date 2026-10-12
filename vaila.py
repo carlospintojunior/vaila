@@ -6,7 +6,7 @@ Author: Paulo Roberto Pereira Santiago
 Email: paulosantiago@usp.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 07 October 2024
-Update Date: 26 September 2026
+Update Date: 12 October 2026
 Version: 0.4.5
 
 Example of usage:
@@ -428,7 +428,7 @@ C_B_r2_c1 - Compress Video C_B_r2_c2 - Video Stabilizer C_B_r2_c3 - Make Sync fi
 C_B_r3_c1 - GetPixelCoord C_B_r3_c2 - Metadata info  C_B_r3_c3 - Merge|Split Video
 C_B_r4_c1 - Distort Video/data C_B_r4_c2 - Cut Video  C_B_r4_c3 - Resize Video
 C_B_r5_c1 - YT Downloader C_B_r5_c2 - Insert Audio   C_B_r5_c3 - rm Dup PNG
-C_B_r6_c1 - Record Cameras C_B_r6_c2 - Cut Cameras
+C_B_r6_c1 - Record Cameras C_B_r6_c2 - Cut Cameras C_B_r6_c3 - Marcha Fácil
 
 -> C_C: Visualization
 C_C_r1_c1 - Show C3D      C_C_r1_c2 - Show CSV 3D    C_C_r2_c1 - Plot 2D
@@ -1589,6 +1589,14 @@ class Vaila(tk.Tk):
             width=button_width,
         )
 
+        # C_B_r6_c3 - Video: step-by-step gait wizard (cut -> processing -> results)
+        gait_wizard_btn = tk.Button(
+            tools_col2,
+            text="Marcha Fácil",
+            command=self.gait_wizard,
+            width=button_width,
+        )
+
         # Packing Video buttons
         extract_png_btn.grid(row=0, column=0, padx=2, pady=2)
         planar_geo_btn.grid(row=0, column=1, padx=2, pady=2)
@@ -1607,6 +1615,7 @@ class Vaila(tk.Tk):
         remove_duplicate_frames_btn.grid(row=4, column=2, padx=2, pady=2)
         record_cameras_btn.grid(row=5, column=0, padx=2, pady=2)
         cut_cameras_btn.grid(row=5, column=1, padx=2, pady=2)
+        gait_wizard_btn.grid(row=5, column=2, padx=2, pady=2)
         tools_col2.pack(side="left", fill="both", expand=True, padx=5, pady=5)
 
         ## VVVVVVVVVVVVVVV VISUALIZATION BUTTONS VVVVVVVVVVVVVVVV
@@ -3288,6 +3297,18 @@ class Vaila(tk.Tk):
         from vaila import multicam_cut
 
         multicam_cut.run_multicam_cut(parent=self)
+
+    # C_B_r6_c3
+    def gait_wizard(self):
+        """Open "Marcha Fácil", the step-by-step gait wizard (UI in Portuguese).
+
+        Choose a Record Cameras session, cut it (Cut Cameras), then one click
+        runs MediaPipe, gait phases (gait_auto) and MP Angles and shows the
+        results in plain language.
+        """
+        from vaila import gait_wizard
+
+        gait_wizard.run_gait_wizard(parent=self)
 
     # C_C_r1_c1
     def show_c3d_data(self):
