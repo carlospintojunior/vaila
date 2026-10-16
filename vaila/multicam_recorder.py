@@ -6,7 +6,7 @@ Author: Carlos Pinto Jr
 Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 26 September 2026
-Update Date: 12 October 2026
+Update Date: 16 October 2026
 Version: 0.4.8
 
 Description:
@@ -58,7 +58,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import cast
 
 import cv2
@@ -445,6 +445,37 @@ def format_record_cli_command(cmd: list[str]) -> str:
 
 
 # ── Output naming ────────────────────────────────────────────────────────────
+
+
+def create_subfolder(base: Path, name: str) -> Path:
+    """Create ``base/<sanitized name>`` (existing folder is fine) and return it."""
+    safe_name = sanitize_output_basename(name)
+    if not safe_name:
+        raise ValueError("Invalid folder name")
+    target = Path(base) / safe_name
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def ask_new_subfolder(parent: tk.Misc, base: str) -> str:
+    """Ask for a name and create a new folder inside ``base``; return its path or ``""``.
+
+    The native Linux/Tk folder picker has no "create folder" button, so tools
+    that pick output folders offer this next to their Browse button.
+    """
+    if not base or not Path(base).is_dir():
+        messagebox.showerror("vailá", "Choose a valid folder first.", parent=parent)
+        return ""
+    name = simpledialog.askstring(
+        "New folder", f"Name of the new folder inside:\n{base}", parent=parent
+    )
+    if not name or not name.strip():
+        return ""
+    try:
+        return str(create_subfolder(Path(base), name))
+    except (ValueError, OSError) as exc:
+        messagebox.showerror("vailá", f"Could not create the folder: {exc}", parent=parent)
+        return ""
 
 
 def build_session_dir(output_dir: Path, session_name: str, timestamp: str | None = None) -> Path:
@@ -1003,13 +1034,19 @@ class _CameraRow:
 class MulticamRecorderApp:
     """GUI controller: detected-cameras list + output settings + Start/Stop."""
 
-    def __init__(self, window: tk.Toplevel) -> None:
+    def __init__(
+        self,
+        window: tk.Toplevel,
+        output_dir: str | None = None,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
         self.window = window
+        self._on_close_callback = on_close
         self.window.title("vailá - Record Cameras")
         self.controller = MulticamRecorderController(get_ffmpeg_path())
         self.preview_controller = CameraPreviewController()
         self.rows: list[_CameraRow] = []
-        self.output_dir_var = tk.StringVar(value=load_last_output_dir())
+        self.output_dir_var = tk.StringVar(value=output_dir or load_last_output_dir())
         self.session_name_var = tk.StringVar(value="trial01")
         self.is_recording = False
         self._watchdog_job: str | None = None
@@ -1050,6 +1087,10 @@ class MulticamRecorderApp:
         self.output_entry.pack(side="left", padx=6)
         self.output_btn = ttk.Button(output_row, text="Browse...", command=self._choose_output_dir)
         self.output_btn.pack(side="left")
+        self.new_folder_btn = ttk.Button(
+            output_row, text="New folder...", command=self._new_output_subfolder
+        )
+        self.new_folder_btn.pack(side="left", padx=(4, 0))
 
         session_row = ttk.Frame(outer)
         session_row.pack(fill="x", pady=4)
@@ -1069,6 +1110,12 @@ class MulticamRecorderApp:
         if selected:
             self.output_dir_var.set(selected)
             save_last_output_dir(selected)
+
+    def _new_output_subfolder(self) -> None:
+        created = ask_new_subfolder(self.window, self.output_dir_var.get().strip())
+        if created:
+            self.output_dir_var.set(created)
+            save_last_output_dir(created)
 
     def rescan_cameras(self) -> None:
         self.preview_controller.stop_all()
@@ -1257,6 +1304,7 @@ class MulticamRecorderApp:
         state = "normal" if enabled else "disabled"
         self.rescan_btn.config(state=state)
         self.output_btn.config(state=state)
+        self.new_folder_btn.config(state=state)
         self.output_entry.config(state=state)
         self.session_entry.config(state=state)
 
@@ -1270,10 +1318,20 @@ class MulticamRecorderApp:
         self.preview_controller.stop_all()
         self.controller.cleanup_preview_snapshots()
         self.window.destroy()
+        if self._on_close_callback is not None:
+            self._on_close_callback()
 
 
-def run_multicam_recorder(parent: tk.Tk | tk.Toplevel | None = None) -> None:
-    """Open the multi-camera simultaneous recording tool."""
+def run_multicam_recorder(
+    parent: tk.Tk | tk.Toplevel | None = None,
+    output_dir: str | None = None,
+    on_close: Callable[[], None] | None = None,
+) -> MulticamRecorderApp:
+    """Open the multi-camera simultaneous recording tool.
+
+    ``output_dir`` pre-fills the output folder; ``on_close()`` (optional) runs
+    after the window is closed (e.g. so a caller can refresh its session list).
+    """
     print(f"Running script: {Path(__file__).name}")
     print(f"Script directory: {Path(__file__).parent}")
     print("Starting multicam_recorder...")
@@ -1287,10 +1345,11 @@ def run_multicam_recorder(parent: tk.Tk | tk.Toplevel | None = None) -> None:
         created_root = True
 
     window = tk.Toplevel(root)
-    MulticamRecorderApp(window)
+    app = MulticamRecorderApp(window, output_dir=output_dir, on_close=on_close)
 
     if created_root:
         root.mainloop()
+    return app
 
 
 if __name__ == "__main__":
