@@ -217,3 +217,19 @@ def test_print_report_prefers_pdf_and_report_info(tmp_path):
         "left",
         "trial01",
     )
+
+
+def test_create_subfolder_inside_base(tmp_path):
+    from vaila.multicam_recorder import create_subfolder
+
+    made = create_subfolder(tmp_path, "paciente 01")
+    assert made.is_dir()
+    assert made.parent == tmp_path
+    assert create_subfolder(tmp_path, "paciente 01") == made  # idempotent
+
+
+def test_create_subfolder_rejects_empty_name(tmp_path):
+    from vaila.multicam_recorder import create_subfolder
+
+    with pytest.raises(ValueError):
+        create_subfolder(tmp_path, "///")

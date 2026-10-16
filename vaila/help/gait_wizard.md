@@ -15,8 +15,10 @@
 background. It takes a **Record Cameras** session to gait results with one big
 button per screen and no file dialogs or settings to understand:
 
-1. **Captura** — recording from inside the wizard is planned ("em breve"). For
-   now the user picks an existing session from a list showing date, time,
+1. **Captura** — **Gravar agora** opens Record Cameras with the output folder already set to
+   the recordings folder, and the list refreshes when it closes. **Nova
+   pasta…** creates a new folder inside the recordings folder (the native Linux
+   folder picker has no such button). Or the user picks an existing session from a list showing date, time,
    number of cameras, status (Nova / Cortada / Analisada) and a preview image
    of every camera.
 2. **Corte** — **Cut Cameras** opens with the session already loaded; when the

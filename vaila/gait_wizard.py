@@ -6,7 +6,7 @@ Author: Carlos Pinto Jr
 Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 12 October 2026
-Update Date: 12 October 2026
+Update Date: 16 October 2026
 Version: 0.4.8
 
 Description:
@@ -14,9 +14,12 @@ A step-by-step wizard (UI in Portuguese) that takes a user with no computer
 background from a "Record Cameras" session to gait results, one big button
 per screen:
 
-1. Captura       - recording from here is not available yet ("em breve");
-                   the user picks an existing session from a list (date,
-                   time, cameras, status and a preview of each camera).
+1. Captura       - "Gravar agora" opens Record Cameras (output folder already
+                   set to the recordings folder); or the user picks an existing
+                   session from a list (date, time, cameras, status and a
+                   preview of each camera). "Nova pasta…" creates a folder
+                   inside the recordings folder (the native Linux folder
+                   picker has no such button).
 2. Corte         - opens "Cut Cameras" with the session already loaded and
                    moves on by itself when the cut finishes; or "use the
                    whole video", or reuse a previous cut.
@@ -84,7 +87,12 @@ try:
     )
     from .gait_report import ReportInfo, write_reports
     from .multicam_cut import discover_session_videos, read_frame_times
-    from .multicam_recorder import load_config_value, save_config_value
+    from .multicam_recorder import (
+        ask_new_subfolder,
+        load_config_value,
+        run_multicam_recorder,
+        save_config_value,
+    )
 except ImportError:
     from filter_utils import butter_filter  # ty: ignore[unresolved-import]
     from gait_auto import (  # ty: ignore[unresolved-import]
@@ -100,7 +108,9 @@ except ImportError:
         read_frame_times,
     )
     from multicam_recorder import (  # ty: ignore[unresolved-import]
+        ask_new_subfolder,
         load_config_value,
+        run_multicam_recorder,
         save_config_value,
     )
 
@@ -747,6 +757,7 @@ class GaitWizardApp:
         self.processing = False
         self._images: list = []  # keep PhotoImage references alive
         self._cut_app = None  # the open Cut Cameras tool, if any
+        self._recorder_app = None  # the open Record Cameras tool, if any
         self._events: queue.Queue[tuple] = queue.Queue()
         self._log_lines: list[str] = []
 
@@ -796,8 +807,6 @@ class GaitWizardApp:
                 text, color, weight = f"{i + 1}  {name}", ACCENT, "bold"
             else:
                 text, color, weight = f"{i + 1}  {name}", MUTED, "normal"
-            if i == 0:
-                text += " (em breve)" if i != self.step else ""
             tk.Label(self.stepper, text=text, bg=BG, fg=color, font=(FONT, 12, weight)).pack(
                 side="left"
             )
@@ -831,13 +840,19 @@ class GaitWizardApp:
     def _step_capture(self) -> None:
         self._title(
             "Escolha a gravação",
-            "A gravação direto por aqui chegará em breve. Por enquanto, escolha abaixo "
-            "uma gravação já feita com o Record Cameras e clique em Próximo.",
+            "Clique em “Gravar agora” para filmar com as câmeras, ou escolha abaixo "
+            "uma gravação já feita e clique em Próximo.",
         )
         row = ttk.Frame(self.body, style="W.TFrame")
         row.pack(fill="x", pady=(0, 8))
-        ttk.Button(row, text="Trocar pasta…", style="Mid.TButton", command=self._pick_root).pack(
+        ttk.Button(row, text="Gravar agora", style="Mid.TButton", command=self._record_now).pack(
             side="right"
+        )
+        ttk.Button(row, text="Nova pasta…", style="Mid.TButton", command=self._new_root).pack(
+            side="right", padx=(0, 8)
+        )
+        ttk.Button(row, text="Trocar pasta…", style="Mid.TButton", command=self._pick_root).pack(
+            side="right", padx=(0, 8)
         )
         self.root_label = ttk.Label(row, text=short_path(self.sessions_root), style="W.TLabel")
         self.root_label.pack(side="left")
@@ -861,14 +876,39 @@ class GaitWizardApp:
         self.next_btn.config(text="Próximo  ▶", command=self._capture_next)
         self._fill_sessions()
 
+    def _set_root(self, folder: str) -> None:
+        self.sessions_root = Path(folder)
+        save_config_value(CONFIG_SECTION, "sessions_root", folder)
+        self.root_label.config(text=short_path(self.sessions_root))
+        self._fill_sessions()
+
     def _pick_root(self) -> None:
         folder = filedialog.askdirectory(
             parent=self.window, title="Pasta com as gravações", initialdir=str(self.sessions_root)
         )
         if folder:
-            self.sessions_root = Path(folder)
-            save_config_value(CONFIG_SECTION, "sessions_root", folder)
-            self.root_label.config(text=short_path(self.sessions_root))
+            self._set_root(folder)
+
+    def _new_root(self) -> None:
+        """Create a new folder inside the current recordings folder and switch to it."""
+        if not self.sessions_root.is_dir():
+            self.sessions_root.mkdir(parents=True, exist_ok=True)
+        folder = ask_new_subfolder(self.window, str(self.sessions_root))
+        if folder:
+            self._set_root(folder)
+
+    def _record_now(self) -> None:
+        """Open Record Cameras on the recordings folder; refresh the list when it closes."""
+        if not self.sessions_root.is_dir():
+            self.sessions_root.mkdir(parents=True, exist_ok=True)
+        self._recorder_app = run_multicam_recorder(
+            parent=self.window,
+            output_dir=str(self.sessions_root),
+            on_close=self._after_record,
+        )
+
+    def _after_record(self) -> None:
+        if self.step == 0 and self.window.winfo_exists():
             self._fill_sessions()
 
     def _fill_sessions(self) -> None:
