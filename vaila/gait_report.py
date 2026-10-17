@@ -6,8 +6,8 @@ Author: Carlos Pinto Jr
 Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 12 October 2026
-Update Date: 12 October 2026
-Version: 0.4.8
+Update Date: 17 October 2026
+Version: 0.4.9
 
 Description:
 Builds a printable report (HTML + PDF) from a Marcha Fácil / gait_auto
@@ -15,8 +15,10 @@ analysis folder, in Portuguese or English:
 
 Page 1 (patient and therapist): identification, a plain-language summary,
 temporal gait parameters next to literature reference ranges (values outside
-the range are highlighted), joint angles over the gait cycle and four frames
-of the MP Angles video (heel strike, mid-stance, toe-off, mid-swing).
+the range are highlighted), joint angles over the gait cycle, four frames
+of the MP Angles video (heel strike, mid-stance, toe-off, mid-swing), and
+the MP Angles skeleton-sequence image for every analysed camera (lateral
+and, when present, a coronal/frontal camera).
 
 Page 2 (therapist): range of motion per side against references; MP Angles
 statistics per joint split into Right / Left / Neck tables (mean, SD,
@@ -141,6 +143,13 @@ TEXT = {
         "kf_ms": "Meio do apoio",
         "kf_to": "Saída do pé",
         "kf_sw": "Meio do balanço",
+        "skeleton_overview": "Esqueleto e ângulos ao longo da caminhada (MP Angles)",
+        "skeleton_overview_note": (
+            "Sequência de quadros com o esqueleto detectado e os ângulos das "
+            "articulações, uma imagem por câmera analisada."
+        ),
+        "view_lateral": "vista lateral",
+        "view_coronal": "vista frontal (coronal)",
         "technical": "Detalhes técnicos (para o terapeuta)",
         "rom": "Amplitude de movimento no ciclo (média dos ciclos)",
         "joint": "Articulação",
@@ -283,6 +292,13 @@ TEXT = {
         "kf_ms": "Mid-stance",
         "kf_to": "Toe-off",
         "kf_sw": "Mid-swing",
+        "skeleton_overview": "Skeleton and angles across the walk (MP Angles)",
+        "skeleton_overview_note": (
+            "Sequence of frames with the detected skeleton and joint angles, one "
+            "image per analysed camera."
+        ),
+        "view_lateral": "side view",
+        "view_coronal": "frontal view (coronal)",
         "technical": "Technical details (for the therapist)",
         "rom": "Range of motion in the cycle (mean of cycles)",
         "joint": "Joint",
@@ -788,6 +804,23 @@ def grab_frames(video: Path, times: np.ndarray, wanted: list[tuple[str, float]],
     return out
 
 
+def stick_sequence_images(angles_dir: Path, lateral_cams: set[str]) -> list[tuple[str, bool, str]]:
+    """``[(camera, is_lateral, base64 PNG)]`` for every MP Angles stick-figure sequence found.
+
+    One image per analysed camera (``mpangles.process_video_with_visualization``
+    always renders ``<stem>_stick_sequence.png`` into ``angles_dir``); cameras not
+    in ``lateral_cams`` (e.g. a coronal/frontal camera) are flagged as such.
+    """
+    if not angles_dir.is_dir():
+        return []
+    out = []
+    for path in sorted(angles_dir.glob("*_stick_sequence.png")):
+        camera = path.name.split("_")[0]
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+        out.append((camera, camera in lateral_cams, data))
+    return out
+
+
 # ── HTML ─────────────────────────────────────────────────────────────────────
 
 CSS = """
@@ -823,6 +856,9 @@ td:first-child, th:first-child, td.l { text-align: left; }
 .frames { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .frames figure { margin: 0; text-align: center; font-size: 11px; color: var(--muted); }
 .frames img { width: 100%; border-radius: 4px; border: 1px solid var(--line); }
+.skeletons { display: flex; flex-direction: column; gap: 10px; margin: 8px 0; }
+.skeletons figure { margin: 0; text-align: center; font-size: 11.5px; color: var(--muted); }
+.skeletons img { width: 100%; border-radius: 4px; border: 1px solid var(--line); }
 img.chart { width: 100%; }
 .alert { background: #fff8e1; border-left: 4px solid var(--warn); padding: 6px 10px; margin: 4px 0; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -845,6 +881,7 @@ details { margin-top: 8px; }
   .id { padding: 6px 10px; }
   img.chart { max-height: 58mm; object-fit: contain; }
   .frames img { max-height: 30mm; object-fit: cover; }
+  .skeletons img { max-height: 70mm; object-fit: contain; }
   .page { box-shadow: none; margin: 0; padding: 0; max-width: none; page-break-after: always; }
   .page:last-of-type { page-break-after: auto; }
   .toolbar, .screen-only { display: none !important; }
@@ -898,6 +935,7 @@ def build_report_html(analysis_dir: Path, info: ReportInfo, lang: str = "pt") ->
         if not p.name.startswith("angles_")
     }
     camera = best_camera(cycles, rel_files)
+    skeletons = stick_sequence_images(angles_dir, set(rel_files))
     if not info.recording:
         parent = analysis_dir.parent
         info.recording = parent.parent.name if parent.name.startswith("processed_") else parent.name
@@ -1026,6 +1064,20 @@ def build_report_html(analysis_dir: Path, info: ReportInfo, lang: str = "pt") ->
             f"<h2>{_esc(t['key_frames'])} — {_esc(camera)}</h2><div class='frames'>{figs}</div>"
         )
 
+    skeleton_html = ""
+    if skeletons:
+        figs = "".join(
+            f"<figure><img src='data:image/png;base64,{b}'>"
+            f"<figcaption>{_esc(cam)} — "
+            f"{_esc(t['view_lateral'] if lat else t['view_coronal'])}</figcaption></figure>"
+            for cam, lat, b in skeletons
+        )
+        skeleton_html = (
+            f"<h2>{_esc(t['skeleton_overview'])}</h2>"
+            f"<div class='note'>{_esc(t['skeleton_overview_note'])}</div>"
+            f"<div class='skeletons'>{figs}</div>"
+        )
+
     page1 = f"""
 <section class="page">
   <header><div><h1>{_esc(t["title"])}</h1><div class="sub">{_esc(t["subtitle"])}</div></div>
@@ -1041,6 +1093,7 @@ def build_report_html(analysis_dir: Path, info: ReportInfo, lang: str = "pt") ->
   <div class="note">{_esc(t["ref_source"])}</div>
   {chart}
   {frames_html}
+  {skeleton_html}
   <div class="disclaimer">{_esc(t["disclaimer"])}</div>
 </section>"""
 

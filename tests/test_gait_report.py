@@ -105,6 +105,20 @@ def test_cycle_pattern_identical_cycles_have_no_variability():
     assert n == 4 and np.nanmax(sd) < 0.5 and mean.max() == pytest.approx(60, abs=2)
 
 
+def test_stick_sequence_images_flags_lateral_vs_coronal(tmp_path):
+    angles_dir = tmp_path / "angles"
+    angles_dir.mkdir()
+    (angles_dir / "cam2_trial01_stick_sequence.png").write_bytes(b"\x89PNG")
+    (angles_dir / "cam1_trial01_stick_sequence.png").write_bytes(b"\x89PNG")
+    images = gr.stick_sequence_images(angles_dir, {"cam2"})
+    found = {(cam, lateral) for cam, lateral, _b64 in images}
+    assert found == {("cam1", False), ("cam2", True)}
+
+
+def test_stick_sequence_images_missing_dir(tmp_path):
+    assert gr.stick_sequence_images(tmp_path / "nope", set()) == []
+
+
 def test_reference_status_and_formatting():
     assert gr.reference_status("stance_pct", 60) == "ok"
     assert gr.reference_status("stance_pct", 67) == "above"
@@ -154,6 +168,17 @@ def test_build_report_html(tmp_path, lang):
     assert text.count("<h3>") >= 3  # right / left / neck statistics tables
     assert t["affected_tag"] in text
     assert "window.print()" in text
+
+
+def test_build_report_html_embeds_skeleton_sequences(tmp_path):
+    out = _analysis_dir(tmp_path)
+    (out / "angles" / "cam2_trial01_stick_sequence.png").write_bytes(b"\x89PNG")
+    (out / "angles" / "cam1_trial01_stick_sequence.png").write_bytes(b"\x89PNG")
+    text = gr.build_report_html(out, gr.ReportInfo("Paciente X"), "pt")
+    t = gr.TEXT["pt"]
+    assert t["skeleton_overview"] in text
+    assert f"cam2 — {t['view_lateral']}" in text
+    assert f"cam1 — {t['view_coronal']}" in text
 
 
 def test_write_reports_without_pdf(tmp_path):

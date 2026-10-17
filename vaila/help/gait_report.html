@@ -90,7 +90,7 @@
 <ul>
 <li><b>Category:</b> Tools</li>
 <li><b>File:</b> <code>vaila/gait_report.py</code></li>
-<li><b>Version:</b> 0.4.8</li>
+<li><b>Version:</b> 0.4.9</li>
 <li><b>GUI Interface:</b> ✅ Yes (built automatically by <b>Marcha Fácil</b>; button "Relatório para imprimir" on its results screen)</li>
 <li><b>CLI Interface:</b> ✅ Yes (<code>uv run python vaila/gait_report.py --analysis &lt;gait_analysis_dir&gt;</code>)</li>
 <li><b>Languages:</b> Portuguese and English</li>
@@ -104,6 +104,7 @@
 <li>Temporal parameters: cadence, stance, swing, double support, stride time, left/right difference and peak knee flexion in swing. Values outside the reference range are shown in bold and colour.</li>
 <li>Hip, knee and ankle angles over the gait cycle (mean ± SD per side).</li>
 <li>Four frames of the MP Angles video: heel strike, mid-stance, toe-off and mid-swing.</li>
+<li>The MP Angles skeleton-sequence image for every analysed camera (one image per camera, captioned "side view" or "frontal view (coronal)"): a grid of frames across the walk with the detected skeleton and joint angle values — built by <code>mpangles.plot_stick_sequence_mpangles</code>, already generated when the skeleton + angles video is rendered.</li>
 </ul>
 <p><b>Page 2, technical (for the therapist)</b></p>
 <ul>
@@ -133,7 +134,7 @@ gait_report_print_en.html / .pdf      English</pre>
 <li>With fewer than 3 cycles per side, only abrupt changes are checked, and the report says so.</li>
 <li>2D angles in the camera plane, with no calibration.</li>
 </ul>
-<div class="footer"><p>📅 Updated: 12/10/2026</p><p>🔗 Part of <i>vailá</i> - Multimodal Toolbox</p>
+<div class="footer"><p>📅 Updated: 17/10/2026</p><p>🔗 Part of <i>vailá</i> - Multimodal Toolbox</p>
 <p>🌐 <a href="https://github.com/vaila-multimodaltoolbox/vaila">GitHub Repository</a></p></div>
 </div>
 </body>

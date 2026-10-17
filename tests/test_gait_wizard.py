@@ -64,6 +64,25 @@ def test_camera_name_from_cut_file():
     assert gw.camera_name(Path("cam2_trial01_frame_10_to_500.mp4")) == "cam2"
 
 
+def test_default_coronal_cameras_remembers_saved_value(monkeypatch):
+    monkeypatch.setattr(
+        gw,
+        "load_config_value",
+        lambda _section, key: "cam1,cam4" if key == "coronal_cameras" else "",
+    )
+    assert gw.default_coronal_cameras(["cam1", "cam2", "cam3"], ["cam2"]) == ["cam1"]
+
+
+def test_default_coronal_cameras_no_saved_value(monkeypatch):
+    monkeypatch.setattr(gw, "load_config_value", lambda *_args: "")
+    assert gw.default_coronal_cameras(["cam1", "cam2", "cam3"], ["cam2", "cam3"]) == []
+
+
+def test_process_coronal_cameras_noop_without_coronal(tmp_path):
+    gw.process_coronal_cameras(tmp_path, [], tmp_path, log=lambda _m: None)
+    assert not (tmp_path / "angles").exists()
+
+
 def test_normalize_cycles_resamples_and_converts_knee():
     fs = 30.0
     n = 120

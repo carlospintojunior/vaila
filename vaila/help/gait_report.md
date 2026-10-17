@@ -4,7 +4,7 @@
 
 - **Category:** Tools
 - **File:** `vaila/gait_report.py`
-- **Version:** 0.4.8
+- **Version:** 0.4.9
 - **GUI Interface:** ✅ Yes (built automatically by **Marcha Fácil**; button "Relatório para imprimir" on its results screen)
 - **CLI Interface:** ✅ Yes (`uv run python vaila/gait_report.py --analysis <gait_analysis_dir>`)
 - **Languages:** Portuguese and English
@@ -25,6 +25,11 @@ analysis folder.
 - Hip, knee and ankle angles over the gait cycle (mean ± SD per side).
 - Four frames of the MP Angles video: heel strike, mid-stance, toe-off and
   mid-swing.
+- The MP Angles skeleton-sequence image for every analysed camera (one image
+  per camera, captioned "side view" or "frontal view (coronal)"): a grid of
+  frames across the walk with the detected skeleton and joint angle values —
+  built by `mpangles.plot_stick_sequence_mpangles`, already generated when the
+  skeleton + angles video is rendered.
 
 **Page 2, technical (for the therapist)**
 - Range of motion per joint and side, compared with references.
@@ -94,6 +99,6 @@ uv run python vaila/gait_report.py --analysis <gait_analysis_dir> \
 
 ---
 
-📅 **Updated:** 12/10/2026
+📅 **Updated:** 17/10/2026
 🔗 **Part of _vailá_ - Multimodal Toolbox**
 🌐 [GitHub Repository](https://github.com/vaila-multimodaltoolbox/vaila)
