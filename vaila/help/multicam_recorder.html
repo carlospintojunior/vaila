@@ -91,7 +91,7 @@
         <h3>📋 Module Information</h3>
         <p><strong>Category:</strong> Tools</p>
         <p><strong>File:</strong> vaila/multicam_recorder.py</p>
-        <p><strong>Version:</strong> 0.4.8</p>
+        <p><strong>Version:</strong> 0.4.9</p>
         <p><strong>GUI Interface:</strong> ✅ Yes</p>
         <p><strong>CLI Interface:</strong> ❌ No (GUI only; prints an equivalent CLI command per camera)</p>
       </div>
@@ -183,7 +183,19 @@
             Windows DirectShow duplicate device names (two identical webcam
             models) are disambiguated via the device's
             <code>@device_pnp_...</code> alternative name, not a friendlier
-            label.
+            label — the GUI lists them as e.g. three rows of
+            <code>DV20 USB CAMERA</code>, in the order Windows enumerates them.
+          </li>
+          <li>
+            <strong>Windows (validated 16/10/2026, Windows 10, FFmpeg 9.0.2,
+            3× DV20 at 1280x720/30 fps)</strong>: both FFmpeg listing formats
+            are understood (older "DirectShow video devices" headers and the
+            newer per-entry <code>(video)</code> tags); the live preview opens
+            each camera through OpenCV's DirectShow backend at the same index
+            ffmpeg uses, so each tile shows the right camera. A 60 s session
+            recorded 1805–1806 frames per camera. Install FFmpeg first
+            (<code>winget install --id Gyan.FFmpeg -e</code>, or the
+            <i>vailá</i> Windows installer run as Administrator).
           </li>
           <li>
             No hardware frame-level synchronization between cameras — relies
@@ -203,11 +215,24 @@
             camera's preview frees the bandwidth, and clicking
             <strong>Preview</strong> again retries without restarting.
           </li>
+          <li>
+            <strong>USB bandwidth (Windows / any xHCI laptop)</strong>: the
+            limit is <strong>one DV20 per physical USB port</strong> (each root
+            port has its own USB 2.0 bandwidth). A hub shares its single port,
+            so it can hold at most one DV20; the second one on the same hub
+            fails with <code>Could not run graph</code>. Device Manager → View
+            → <i>Devices by connection</i> shows which cameras share a port.
+          </li>
+          <li>
+            If a camera's ffmpeg stops during a recording, its Status turns
+            <strong>disconnected</strong> and the last lines of its ffmpeg
+            output are printed in the terminal.
+          </li>
         </ul>
       </div>
 
       <div class="footer">
-        <p>📅 Updated: 12/10/2026</p>
+        <p>📅 Updated: 16/10/2026</p>
         <p>🔗 Part of vailá - Multimodal Toolbox</p>
         <p>
           🌐

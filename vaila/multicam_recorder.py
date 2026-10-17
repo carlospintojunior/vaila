@@ -7,7 +7,7 @@ Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 26 September 2026
 Update Date: 16 October 2026
-Version: 0.4.8
+Version: 0.4.9
 
 Description:
 Records video from multiple detected cameras simultaneously, through a simple
@@ -59,7 +59,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import cast
+from typing import IO, cast
 
 import cv2
 import numpy as np
@@ -88,6 +88,11 @@ class CameraDevice:
 
     backend: str
     """One of ``"v4l2"``, ``"avfoundation"``, ``"dshow"``."""
+
+    cv_index: int | None = None
+    """OpenCV capture index for the live preview, when the listing gives one
+    (Windows: position in DirectShow's video-device category, the order
+    ``cv2.CAP_DSHOW`` uses). ``None`` falls back to the camera's list position."""
 
 
 def enumerate_cameras() -> list[CameraDevice]:
@@ -133,10 +138,27 @@ def _open_capture(cv_target: int | str) -> cv2.VideoCapture:
     bandwidth), every later open of that path fails too, even after the
     bandwidth is freed — so a camera could never be retried without
     restarting vailá. Asking for CAP_V4L2 explicitly reopens it fine.
+
+    On Windows an integer index is opened with CAP_DSHOW: its device order is
+    the one ffmpeg's dshow listing reports (see ``CameraDevice.cv_index``),
+    while the default Media Foundation backend may number cameras differently.
     """
     if isinstance(cv_target, str):
         return cv2.VideoCapture(cv_target, cv2.CAP_V4L2)
+    if sys.platform.startswith("win"):
+        return cv2.VideoCapture(cv_target, cv2.CAP_DSHOW)
     return cv2.VideoCapture(cv_target)
+
+
+def preview_target(device: CameraDevice, order_index: int) -> int | str:
+    """OpenCV target for ``device``: its path on Linux, else an index.
+
+    The index comes from the device listing when it has one (Windows), else
+    the camera's position in the enumerated list is used as a best guess.
+    """
+    if device.backend == "v4l2":
+        return device.id
+    return device.cv_index if device.cv_index is not None else order_index
 
 
 def _is_capturable_v4l2_device(path: str) -> bool:
@@ -207,40 +229,61 @@ def _parse_dshow_listing(stderr_text: str) -> list[CameraDevice]:
     Each device is announced as a quoted display name line, optionally
     followed by an ``Alternative name "@device_pnp_..."`` line. The
     alternative name is preferred as the ffmpeg ``-i`` identity because it is
-    unique even when two devices share the same display name.
+    unique even when two devices share the same display name (e.g. three
+    identical DV20 USB cameras).
+
+    Two listing formats exist. Older FFmpeg prints "DirectShow video devices"
+    / "DirectShow audio devices" section headers; newer FFmpeg (checked with
+    9.0 on Windows 10) prints no headers and tags each entry instead, e.g.
+    ``"DV20 USB CAMERA" (video)``, ``"OBS Virtual Camera" (none)``,
+    ``"Microphone (USB Audio)" (audio)``. Only entries tagged ``video`` are
+    cameras, but every non-audio entry belongs to DirectShow's video-device
+    category, so it still counts towards ``cv_index``.
     """
     devices: list[CameraDevice] = []
-    in_video_section = False
-    name_pattern = re.compile(r'"([^"]+)"')
+    legacy_section: str | None = None
+    name_pattern = re.compile(r'"([^"]+)"(?:\s+\(([^)]*)\))?')
     alt_pattern = re.compile(r'Alternative name\s+"([^"]+)"')
-    pending_name: str | None = None
+    pending: tuple[str, int] | None = None
+    video_category_index = 0
 
     def flush(alt_id: str | None = None) -> None:
-        nonlocal pending_name
-        if pending_name is not None:
+        nonlocal pending
+        if pending is not None:
+            name, cv_index = pending
             devices.append(
-                CameraDevice(id=alt_id or pending_name, label=pending_name, backend="dshow")
+                CameraDevice(id=alt_id or name, label=name, backend="dshow", cv_index=cv_index)
             )
-            pending_name = None
+            pending = None
 
     for line in stderr_text.splitlines():
         if "DirectShow video devices" in line:
-            in_video_section = True
+            flush()
+            legacy_section = "video"
             continue
         if "DirectShow audio devices" in line:
             flush()
-            in_video_section = False
-            continue
-        if not in_video_section:
+            legacy_section = "audio"
             continue
         alt_match = alt_pattern.search(line)
         if alt_match:
             flush(alt_match.group(1))
             continue
         name_match = name_pattern.search(line)
-        if name_match:
-            flush()
-            pending_name = name_match.group(1)
+        if not name_match:
+            continue
+        flush()
+        name, tags = name_match.group(1), name_match.group(2)
+        if tags is not None:
+            kinds = {kind.strip() for kind in tags.split(",")}
+            in_video_category = kinds != {"audio"}
+            is_camera = "video" in kinds
+        else:
+            in_video_category = is_camera = legacy_section == "video"
+        if in_video_category:
+            if is_camera:
+                pending = (name, video_category_index)
+            video_category_index += 1
     flush()
     return devices
 
@@ -319,12 +362,13 @@ def probe_camera_for_gui(device: CameraDevice, order_index: int) -> tuple[list[s
     ffmpeg), since OpenCV's set-and-read-back probe often reports a single
     size -- e.g. only 1280x720 for a built-in laptop webcam that also offers
     640x480. On Linux the ffmpeg device path doubles as a valid OpenCV target.
-    On macOS/Windows there is no guaranteed index mapping, so the camera's
-    position in the enumerated list is used as a best-effort guess; if it's
-    wrong, probing simply fails open and defaults are used instead (the
-    resolution/fps fields remain editable either way).
+    On Windows the DirectShow index from the listing is used; on macOS there
+    is no guaranteed index mapping, so the camera's position in the
+    enumerated list is a best-effort guess. If the target is wrong, probing
+    simply fails open and defaults are used instead (the resolution/fps
+    fields remain editable either way).
     """
-    target: int | str = device.id if device.backend == "v4l2" else order_index
+    target = preview_target(device, order_index)
     try:
         resolutions, fps_values = probe_camera_capabilities(target)
     except Exception:
@@ -653,6 +697,10 @@ class _SnapshotPreviewSlot:
     def latest_frame(self) -> tuple[bool, np.ndarray | None]:
         # Always "alive": a missing/mid-write file just isn't ready yet, and
         # this slot's lifetime is tied to the recording, not to read success.
+        # Checked first: imread logs a warning per call on a missing file,
+        # flooding the terminal until ffmpeg writes its first snapshot.
+        if not self._jpg_path.exists():
+            return True, None
         return True, cv2.imread(str(self._jpg_path))
 
     def close(self) -> None:
@@ -714,8 +762,9 @@ class CameraPreviewController:
             cap.release()
             on_stopped(True)
             return
-        if isinstance(cv_target, str):
-            # V4L2 path: ask for MJPEG like the ffmpeg recording does, instead
+        if isinstance(cv_target, str) or sys.platform.startswith("win"):
+            # V4L2 path / DirectShow: ask for MJPEG like the ffmpeg recording
+            # does (DV20: 1280x720 is offered only as MJPEG on dshow), instead
             # of OpenCV's default uncompressed YUYV, so cameras that offer
             # several USB alt settings can pick a smaller isochronous one.
             # (Some cameras, e.g. DV20, have a single alt setting reserving
@@ -853,6 +902,18 @@ class ActiveRecording:
     process: subprocess.Popen
     output_path: Path
     alive: bool = True
+    log_path: Path | None = None
+    log_file: IO[bytes] | None = None
+
+    def log_tail(self, lines: int = 5) -> str:
+        """Last lines of this recording's ffmpeg log (for disconnect messages)."""
+        if self.log_path is None:
+            return ""
+        try:
+            text = self.log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        return "\n".join(text.replace("\r", "\n").strip().splitlines()[-lines:])
 
 
 class MulticamRecorderController:
@@ -896,14 +957,23 @@ class MulticamRecorderController:
                 output_path=output_path,
                 preview_snapshot_path=snapshot_path,
             )
+            # ffmpeg's stderr goes to a file, never to an unread PIPE: its
+            # progress lines would fill the pipe buffer (only ~4 KB on
+            # Windows) and ffmpeg would then block, freezing the recording.
+            log_path = self._preview_snapshot_dir / f"cam{index}_ffmpeg.log"
+            log_file = log_path.open("wb")
             process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+                stderr=log_file,
             )
             self._active[camera.id] = ActiveRecording(
-                camera=camera, process=process, output_path=output_path
+                camera=camera,
+                process=process,
+                output_path=output_path,
+                log_path=log_path,
+                log_file=log_file,
             )
             snapshot_paths[camera.id] = snapshot_path
             cli_lines.append(
@@ -962,6 +1032,9 @@ class MulticamRecorderController:
         if recordings:
             with ThreadPoolExecutor(max_workers=len(recordings)) as pool:
                 list(pool.map(_wait, recordings))
+        for rec in recordings:
+            if rec.log_file is not None:
+                rec.log_file.close()
 
         results = {rec.camera.id: rec.output_path for rec in recordings}
         self._active.clear()
@@ -1165,8 +1238,7 @@ class MulticamRecorderApp:
         if self.preview_controller.is_active(row.device.id):
             return
 
-        order_index = self.rows.index(row)
-        cv_target: int | str = row.device.id if row.device.backend == "v4l2" else order_index
+        cv_target = preview_target(row.device, self.rows.index(row))
 
         if row.status_var.get() == _STATUS_NO_IMAGE:
             row.status_var.set("idle")
@@ -1185,9 +1257,9 @@ class MulticamRecorderApp:
             if failed:
                 print(
                     f"\n[Record Cameras] {row.device.label}: camera opened but delivered no "
-                    "image. Usually the USB controller is out of bandwidth (check "
+                    "image. Usually the USB port is out of bandwidth (Linux: check "
                     "'dmesg | tail' for 'Not enough bandwidth'): stop another camera on "
-                    "the same controller or move this one to another USB port.",
+                    "the same port/hub or move this one to another USB port.",
                     flush=True,
                 )
             self.window.after(0, lambda: self._on_preview_stopped(row, failed))
@@ -1259,6 +1331,12 @@ class MulticamRecorderApp:
         if not self.is_recording:
             return
         dead = self.controller.poll_disconnected()
+        for rec in dead:
+            print(
+                f"\n[Record Cameras] {rec.camera.label}: ffmpeg stopped while recording "
+                f"{rec.output_path.name}. Last ffmpeg output:\n{rec.log_tail()}",
+                flush=True,
+            )
         dead_ids = {rec.camera.id for rec in dead}
         for row in self.rows:
             if row.device.id in dead_ids:
