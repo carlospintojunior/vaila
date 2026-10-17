@@ -37,6 +37,13 @@ analysis folder.
   15-column table. Each table gives the mean, SD, minimum and maximum with the
   time they happen, range, between-cycle variability and the number of extreme
   points. The affected side is tagged.
+- **Frontal plane (coronal camera), when present**: pelvic obliquity and knee
+  valgus/varus — mean ± SD and signed peak, plus a time chart. Positive =
+  right pelvic drop / valgus (knee toward the midline); negative = left
+  pelvic drop / varus (away from the midline). Uncalibrated 2D monocular
+  estimate from `gait_wizard.frontal_plane_metrics`: sensitive to camera
+  alignment and body rotation, meant as a screening aid, not an absolute
+  measure — the report says so explicitly.
 - **Points of extreme oscillation**, in bold red, with the time to check in the
   video:
   - *off pattern*: the angle departs from the mean of the person's **other**

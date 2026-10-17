@@ -27,9 +27,10 @@ per screen:
                    angles and the MP Angles skeleton + angles video
                    (mpangles.py) for every lateral camera, plus a MediaPipe
                    + MP Angles skeleton pass (video + stick-figure image,
-                   no gait-cycle detection) for the coronal camera when one
-                   is marked, with a plain-language checklist and elapsed
-                   time.
+                   no gait-cycle detection) plus frontal-plane metrics
+                   (pelvic obliquity, knee valgus/varus) for the coronal
+                   camera when one is marked, with a plain-language
+                   checklist and elapsed time.
 4. Resultados    - a few big numbers (cadence, stance/swing, stride time,
                    symmetry), joint angles over the gait cycle, plain advice
                    when the recording has problems, a big button that plays
@@ -45,6 +46,7 @@ gait_analysis_YYYYMMDD_HHMMSS/
     angles/angles_<video>.mp4                            skeleton + angles video (H.264)
     angles/<video>_rel.csv, _abs_180.csv, _abs_360.csv   (MP Angles)
     angles/<video>.csv       landmarks low-passed at 6 Hz (input of MP Angles)
+    angles/<video>_frontal.csv  coronal camera only: pelvic obliquity, knee valgus/varus per frame
     joint_angles_cycle.csv   mean/SD per % of the gait cycle
     joint_angles_cycle.png   hip / knee / ankle over the gait cycle
 
@@ -410,6 +412,68 @@ def compute_cycle_angles(
     return rows
 
 
+def frontal_plane_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-frame frontal-plane deviations from a coronal camera's pixel landmarks.
+
+    ``pelvic_obliquity_deg``: signed, positive = right hip lower (right pelvic
+    drop), negative = left pelvic drop; 0 = level pelvis.
+    ``left_knee_deg`` / ``right_knee_deg``: signed, positive = valgus (knee
+    deviates toward the body midline), negative = varus (knee deviates away
+    from it); 0 = straight leg in the frontal plane. Magnitude is the angle
+    between the thigh (hip->knee) and shank (knee->ankle) vectors; the sign
+    comes from which side of the straight hip-ankle line the knee falls on,
+    relative to the midpoint between the two hips.
+
+    Approximate 2D monocular measures, with no calibration: sensitive to the
+    person's rotation relative to the camera. Meaningful only as a screening
+    aid when the coronal camera is reasonably square-on to the walkway.
+    """
+    try:
+        from .mpangles import get_vector_landmark
+    except ImportError:
+        from mpangles import get_vector_landmark  # ty: ignore[unresolved-import]
+
+    n = len(df)
+    left_hip = get_vector_landmark(df, "left_hip")
+    right_hip = get_vector_landmark(df, "right_hip")
+    midline_x = (left_hip[:, 0] + right_hip[:, 0]) / 2.0
+
+    dx = np.abs(right_hip[:, 0] - left_hip[:, 0])
+    dy = right_hip[:, 1] - left_hip[:, 1]
+    pelvic_obliquity = np.degrees(np.arctan2(dy, dx))
+
+    def knee_deviation(side: str) -> np.ndarray:
+        hip = get_vector_landmark(df, f"{side}_hip")
+        knee = get_vector_landmark(df, f"{side}_knee")
+        ankle = get_vector_landmark(df, f"{side}_ankle")
+        thigh = knee - hip
+        shank = ankle - knee
+        norm_t = np.linalg.norm(thigh, axis=1)
+        norm_s = np.linalg.norm(shank, axis=1)
+        magnitude = np.full(n, np.nan)
+        valid = (norm_t > 0) & (norm_s > 0)
+        cos_a = np.sum(thigh[valid] * shank[valid], axis=1) / (norm_t[valid] * norm_s[valid])
+        magnitude[valid] = np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0)))
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            t = (knee[:, 1] - hip[:, 1]) / (ankle[:, 1] - hip[:, 1])
+        expected_knee_x = hip[:, 0] + t * (ankle[:, 0] - hip[:, 0])
+        offset = knee[:, 0] - expected_knee_x
+        medial_sign = np.where(midline_x >= hip[:, 0], 1.0, -1.0)
+        signed = offset * medial_sign
+        sign = np.where(np.isfinite(signed), np.where(signed >= 0, 1.0, -1.0), np.nan)
+        return sign * magnitude
+
+    return pd.DataFrame(
+        {
+            "frame": df.iloc[:, 0].to_numpy(),
+            "pelvic_obliquity_deg": pelvic_obliquity,
+            "left_knee_deg": knee_deviation("left"),
+            "right_knee_deg": knee_deviation("right"),
+        }
+    )
+
+
 def process_coronal_cameras(
     source_dir: Path,
     coronal_cameras: list[str],
@@ -420,9 +484,10 @@ def process_coronal_cameras(
 
     No gait-cycle detection here: ``analyze_session_full`` finds walking passes
     from horizontal displacement across the image, which a frontal camera does
-    not show. This only renders the skeleton + angles video and the MP Angles
-    stick-figure sequence image (``angles/<stem>_stick_sequence.png``), picked
-    up by ``gait_report.py``.
+    not show. This renders the skeleton + angles video and the MP Angles
+    stick-figure sequence image (``angles/<stem>_stick_sequence.png``), and
+    writes frontal-plane metrics (pelvic obliquity, knee valgus/varus) to
+    ``angles/<stem>_frontal.csv`` — all picked up by ``gait_report.py``.
     """
     if not coronal_cameras:
         return
@@ -450,6 +515,10 @@ def process_coronal_cameras(
         fs = 1.0 / float(np.median(np.diff(times))) if len(times) > 1 else fps
         smooth_csv = angles_dir / f"{video.stem}.csv"
         smooth_landmarks_csv(csv, smooth_csv, fs)
+        log(f"Frontal-plane metrics: pelvic obliquity and knee valgus/varus for {video.name}")
+        with contextlib.suppress(Exception):
+            frontal = frontal_plane_metrics(pd.read_csv(smooth_csv))
+            frontal.to_csv(angles_dir / f"{video.stem}_frontal.csv", index=False)
         log(f"MP Angles: rendering the frontal-view skeleton for {video.name}")
         with contextlib.suppress(Exception):
             process_video_with_visualization(

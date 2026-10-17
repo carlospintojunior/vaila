@@ -23,7 +23,9 @@ and, when present, a coronal/frontal camera).
 Page 2 (therapist): range of motion per side against references; MP Angles
 statistics per joint split into Right / Left / Neck tables (mean, SD,
 minimum and maximum with their instant, range, CV) instead of one wide
-table; the points of extreme oscillation (|z| above the threshold, or an
+table; frontal-plane screening from the coronal camera when present (pelvic
+obliquity, knee valgus/varus: mean/SD and signed peak, with a time chart);
+the points of extreme oscillation (|z| above the threshold, or an
 abrupt frame-to-frame jump), in bold and colour with the instant to check in
 the video; gait cycles; method and references.
 
@@ -150,6 +152,23 @@ TEXT = {
         ),
         "view_lateral": "vista lateral",
         "view_coronal": "vista frontal (coronal)",
+        "frontal_plane": "Plano frontal (câmera coronal): obliquidade pélvica e valgo/varo do joelho",
+        "frontal_plane_note": (
+            "Estimativa 2D sem calibração, a partir da câmera de frente: sensível ao "
+            "alinhamento da câmera e à rotação do corpo — use como triagem, não como "
+            "medida absoluta. Positivo = queda do quadril direito / joelho em valgo "
+            "(em direção à linha média); negativo = queda do quadril esquerdo / "
+            "joelho em varo (afastando-se da linha média); zero = quadril nivelado / "
+            "perna reta."
+        ),
+        "pelvic_obliquity_metric": "Obliquidade pélvica",
+        "right_knee_metric": "Joelho direito (valgo/varo)",
+        "left_knee_metric": "Joelho esquerdo (valgo/varo)",
+        "knee_valgus_varus": "Valgo (+) / varo (−) do joelho",
+        "peak": "Pico",
+        "chart_pelvic_y": "graus (°) — + queda à direita",
+        "chart_knee_y": "graus (°) — + valgo, − varo",
+        "chart_frontal_x": "tempo (s)",
         "technical": "Detalhes técnicos (para o terapeuta)",
         "rom": "Amplitude de movimento no ciclo (média dos ciclos)",
         "joint": "Articulação",
@@ -299,6 +318,22 @@ TEXT = {
         ),
         "view_lateral": "side view",
         "view_coronal": "frontal view (coronal)",
+        "frontal_plane": "Frontal plane (coronal camera): pelvic obliquity and knee valgus/varus",
+        "frontal_plane_note": (
+            "Uncalibrated 2D estimate from the frontal camera: sensitive to camera "
+            "alignment and body rotation — use as a screening aid, not an absolute "
+            "measure. Positive = right pelvic drop / valgus (knee toward the "
+            "midline); negative = left pelvic drop / varus (knee away from the "
+            "midline); zero = level pelvis / straight leg."
+        ),
+        "pelvic_obliquity_metric": "Pelvic obliquity",
+        "right_knee_metric": "Right knee (valgus/varus)",
+        "left_knee_metric": "Left knee (valgus/varus)",
+        "knee_valgus_varus": "Knee valgus (+) / varus (−)",
+        "peak": "Peak",
+        "chart_pelvic_y": "degrees (°) — + right drop",
+        "chart_knee_y": "degrees (°) — + valgus, − varus",
+        "chart_frontal_x": "time (s)",
         "technical": "Technical details (for the therapist)",
         "rom": "Range of motion in the cycle (mean of cycles)",
         "joint": "Joint",
@@ -821,6 +856,77 @@ def stick_sequence_images(angles_dir: Path, lateral_cams: set[str]) -> list[tupl
     return out
 
 
+FRONTAL_METRICS = ("pelvic_obliquity_deg", "left_knee_deg", "right_knee_deg")
+
+
+def frontal_plane_files(angles_dir: Path) -> list[tuple[str, Path]]:
+    """``[(camera, csv_path)]`` for every coronal camera's frontal-plane metrics CSV."""
+    if not angles_dir.is_dir():
+        return []
+    return [(p.name.split("_")[0], p) for p in sorted(angles_dir.glob("*_frontal.csv"))]
+
+
+def frontal_plane_stats(df: pd.DataFrame) -> dict[str, dict[str, float]]:
+    """Mean, SD and signed peak (furthest from 0) per frontal-plane metric column."""
+    out = {}
+    for col in FRONTAL_METRICS:
+        values = df[col].to_numpy(dtype=float)
+        values = values[np.isfinite(values)]
+        if len(values) == 0:
+            out[col] = {"mean": float("nan"), "sd": float("nan"), "peak": float("nan")}
+            continue
+        out[col] = {
+            "mean": float(values.mean()),
+            "sd": float(values.std(ddof=1)) if len(values) > 1 else float("nan"),
+            "peak": float(values[np.argmax(np.abs(values))]),
+        }
+    return out
+
+
+def frontal_plane_times(angles_dir: Path, stem: str, n: int) -> np.ndarray:
+    """Real per-frame times (s) for a coronal camera's video, else an approximation."""
+    video = angles_dir.parent.parent / f"{stem}.mp4"
+    if video.is_file():
+        _w, _h, count, fps = _video_size(video)
+        return read_frame_times(video, max(count, n), fps)[:n]
+    return np.arange(n, dtype=float) / 30.0
+
+
+def frontal_plane_chart(df: pd.DataFrame, times: np.ndarray, lang: str) -> str | None:
+    """Pelvic obliquity and knee valgus/varus over time, as a base64 PNG (or ``None``)."""
+    try:
+        import io
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+    t = TEXT[lang]
+    colors = {"left": "#1f77b4", "right": "#d62728"}
+    time_s = times[: len(df)]
+    fig, axes = plt.subplots(1, 2, figsize=(9, 3.0))
+    axes[0].plot(time_s, df["pelvic_obliquity_deg"], color="#6b7280", lw=1.4)
+    axes[0].axhline(0, color="#999", lw=1, ls="--")
+    axes[0].set_title(t["pelvic_obliquity_metric"], fontsize=11)
+    axes[0].set_ylabel(t["chart_pelvic_y"])
+    axes[1].plot(time_s, df["right_knee_deg"], color=colors["right"], lw=1.4, label=t["right"])
+    axes[1].plot(time_s, df["left_knee_deg"], color=colors["left"], lw=1.4, label=t["left"])
+    axes[1].axhline(0, color="#999", lw=1, ls="--")
+    axes[1].set_title(t["knee_valgus_varus"], fontsize=11)
+    axes[1].set_ylabel(t["chart_knee_y"])
+    axes[1].legend(fontsize=8)
+    for ax in axes:
+        ax.set_xlabel(t["chart_frontal_x"])
+        ax.grid(alpha=0.3)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=90)
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 # ── HTML ─────────────────────────────────────────────────────────────────────
 
 CSS = """
@@ -936,6 +1042,10 @@ def build_report_html(analysis_dir: Path, info: ReportInfo, lang: str = "pt") ->
     }
     camera = best_camera(cycles, rel_files)
     skeletons = stick_sequence_images(angles_dir, set(rel_files))
+    frontal_cams = [
+        (cam, path.name[: -len("_frontal.csv")], pd.read_csv(path))
+        for cam, path in frontal_plane_files(angles_dir)
+    ]
     if not info.recording:
         parent = analysis_dir.parent
         info.recording = parent.parent.name if parent.name.startswith("processed_") else parent.name
@@ -1158,6 +1268,34 @@ def build_report_html(analysis_dir: Path, info: ReportInfo, lang: str = "pt") ->
             + "".join(parts)
         )
 
+    frontal_html = ""
+    for cam, stem, fdf in frontal_cams:
+        stats = frontal_plane_stats(fdf)
+        times = frontal_plane_times(angles_dir, stem, len(fdf))
+        chart_b64 = frontal_plane_chart(fdf, times, lang)
+        rows = "".join(
+            f"<tr><td class='l'>{_esc(t[label])}</td>"
+            f"<td>{_esc(_fmt(stats[col]['mean'], 1, '°', lang))} ± "
+            f"{_esc(_fmt(stats[col]['sd'], 1, '°', lang))}</td>"
+            f"<td>{_esc(_fmt(stats[col]['peak'], 1, '°', lang))}</td></tr>"
+            for col, label in (
+                ("pelvic_obliquity_deg", "pelvic_obliquity_metric"),
+                ("right_knee_deg", "right_knee_metric"),
+                ("left_knee_deg", "left_knee_metric"),
+            )
+        )
+        chart_html = (
+            f"<img class='chart' src='data:image/png;base64,{chart_b64}'>" if chart_b64 else ""
+        )
+        frontal_html += (
+            f"<h2>{_esc(t['frontal_plane'])} — {_esc(cam)}</h2>"
+            f"<div class='note'>{_esc(t['frontal_plane_note'])}</div>"
+            f"{chart_html}"
+            f"<table><thead><tr><th>{_esc(t['parameter'])}</th><th>{_esc(t['mean'])} ± "
+            f"{_esc(t['sd'])}</th><th>{_esc(t['peak'])}</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+        )
+
     attention_html = f"<h2>{_esc(t['attention'])}</h2>"
     attention_html += (
         "<div class='note'>"
@@ -1230,6 +1368,7 @@ def build_report_html(analysis_dir: Path, info: ReportInfo, lang: str = "pt") ->
   <div class="inst">{_esc(info.institution)}</div></header>
   {rom_html}
   {stats_html}
+  {frontal_html}
   {attention_html}
   {cycles_html}
   <h2>{_esc(t["method"])}</h2><p class="note">{_esc(t["method_text"].format(cam=camera or "–"))}</p>
