@@ -6,8 +6,8 @@ Author: Carlos Pinto Jr
 Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 10 October 2026
-Update Date: 12 October 2026
-Version: 0.4.8
+Update Date: 17 October 2026
+Version: 0.4.9
 
 Description:
 Turns a "Record Cameras" session of people walking past side-view (sagittal)
@@ -182,54 +182,93 @@ def select_camera_videos(session_dir: Path, cameras: list[str]) -> list[Path]:
     return chosen
 
 
-def run_mediapipe(videos: list[Path], output_dir: Path, log: Callable[[str], None]) -> Path:
-    """Run the Markerless 2D headless batch on ``videos``; return its output dir."""
+def _run_mediapipe_once(
+    script: Path, video: Path, work_dir: Path, config: Path, log: Callable[[str], None]
+) -> tuple[int, Path | None, list[str]]:
+    """One headless batch process on a single video.
+
+    Returns (exit code, the per-video result folder or None, last output lines).
+    """
+    input_dir = work_dir / "videos"
+    input_dir.mkdir(parents=True)
+    link = input_dir / video.name
+    try:
+        link.symlink_to(video.resolve())
+    except OSError:  # e.g. Windows without symlink rights
+        shutil.copy2(video, link)
+    out_dir = work_dir / "out"
+    cmd = [
+        sys.executable,
+        str(script),
+        "batch",
+        "-i",
+        str(input_dir),
+        "-o",
+        str(out_dir),
+        "-c",
+        str(config),
+        "--no-sleep-between-videos",
+    ]
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
+    assert proc.stdout is not None
+    tail: list[str] = []
+    for line in proc.stdout:
+        line = line.rstrip()
+        tail = (tail + [line])[-8:]
+        if line.startswith(("Processing video", "Processing complete", "[OK]", "Error")):
+            log(f"  {line}")
+    code = proc.wait()
+    results = sorted(out_dir.glob(f"mediapipe_cli_*/{video.stem}"))
+    done = (
+        results[-1] if results and (results[-1] / f"{video.stem}_mp_pixel.csv").is_file() else None
+    )
+    return code, done, tail
+
+
+def run_mediapipe(
+    videos: list[Path], output_dir: Path, log: Callable[[str], None], attempts: int = 3
+) -> Path:
+    """Run the Markerless 2D headless batch on ``videos``; return its output dir.
+
+    Each video gets its own process: MediaPipe on Windows occasionally dies with an
+    access violation (exit code 3221225477) partway through the second video of a
+    batch, so a fresh process per video — retried on a crash — keeps one bad run
+    from losing the whole session. Results are gathered into one
+    ``mediapipe_cli_<timestamp>/<video stem>/`` tree, the layout the batch writes.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     script = Path(__file__).with_name("markerless_2d_analysis.py")
+    run_dir = output_dir / f"mediapipe_cli_{datetime.now():%Y%m%d_%H%M%S}"
+    run_dir.mkdir(exist_ok=True)
+    log(f"MediaPipe: {len(videos)} video(s) — this takes a few minutes on CPU")
     with tempfile.TemporaryDirectory(prefix="vaila_gait_") as tmp:
         tmp_dir = Path(tmp)
-        input_dir = tmp_dir / "videos"
-        input_dir.mkdir()
-        for video in videos:
-            link = input_dir / video.name
-            try:
-                link.symlink_to(video.resolve())
-            except OSError:  # e.g. Windows without symlink rights
-                shutil.copy2(video, link)
         config = tmp_dir / "gait_mediapipe.toml"
         config.write_text(MEDIAPIPE_CONFIG, encoding="utf-8")
-        cmd = [
-            sys.executable,
-            str(script),
-            "batch",
-            "-i",
-            str(input_dir),
-            "-o",
-            str(output_dir),
-            "-c",
-            str(config),
-            "--no-sleep-between-videos",
-        ]
-        log(f"MediaPipe: {len(videos)} video(s) — this takes a few minutes on CPU")
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip()
-            if line.startswith(("Processing video", "Processing complete", "[OK]", "Error")):
-                log(f"  {line}")
-        if proc.wait() != 0:
-            raise RuntimeError(f"MediaPipe batch failed (exit code {proc.returncode})")
-    runs = sorted(output_dir.glob("mediapipe_cli_*"))
-    if not runs:
-        raise RuntimeError(f"MediaPipe produced no output under {output_dir}")
-    return runs[-1]
+        for video in videos:
+            for attempt in range(1, attempts + 1):
+                work_dir = tmp_dir / f"{video.stem}_try{attempt}"
+                code, done, tail = _run_mediapipe_once(script, video, work_dir, config, log)
+                if code == 0 and done is not None:
+                    shutil.move(str(done), str(run_dir / video.stem))
+                    break
+                log(f"  MediaPipe failed on {video.name} (exit code {code}), attempt {attempt}")
+                if attempt == attempts:
+                    detail = "\n".join(tail)
+                    raise RuntimeError(
+                        f"MediaPipe failed on {video.name} after {attempts} attempts "
+                        f"(exit code {code}). Last output:\n{detail}"
+                    )
+    return run_dir
 
 
 # ── Loading ──────────────────────────────────────────────────────────────────
