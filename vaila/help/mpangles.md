@@ -4,11 +4,11 @@
 
 - **Category:** Utils
 - **File:** `vaila/mpangles.py`
-- **Version:** 0.3.114
+- **Version:** 0.4.9
 - **Author:** Paulo R. P. Santiago
 - **Email:** paulosantiago@usp.br
 - **Creation Date:** 31 March 2025
-- **Update Date:** 25 August 2026
+- **Update Date:** 17 October 2026
 - **Python Version:** 3.12.14
 - **GUI Interface:** ✅ Yes
 - **License:** AGPL v3.0
@@ -41,7 +41,7 @@ The **MP Angles** module calculates absolute and relative joint angles from land
 
 5. **HTML Report**
    - **Angles:** Table preview (first rows of relative angles CSV). Download links for all CSV files.
-   - **Pose sequence (stick figures):** PNG with colored stick figures by frame (blue left, red right, gray center, green joints) and angle values at joints — no embedded video in the report.
+   - **Pose sequence (stick figures):** PNG with colored stick figures by frame (blue left, red right, gray center, green joints) and angle values at joints — no embedded video in the report. Frames are sampled among those where hips/knees/shoulders are detected, so a frame with nobody in view is not wasted on a blank panel.
    - For **directory** runs: **batch_analysis_report.html** lists each processed video with links to its report and output video.
 
 6. **Video overlay (when video is used)**
@@ -54,7 +54,7 @@ The **MP Angles** module calculates absolute and relative joint angles from land
 - **`process_video_with_visualization(video_path, csv_path=None, output_dir=None, filter_config=None)`** — Runs angle calculation, draws skeleton + angles on video, generates report and stick figure PNG; returns output_dir.
 - **`process_directory_videos(directory_path, filter_config=None)`** — Batch: finds videos, matches CSVs by name, runs visualization for each.
 - **`draw_skeleton_enhanced(frame, landmarks, rel_angles, abs_angles, abs_angles_360=None)`** — Draws skeleton and angle panels (left abs -180..180, right abs 0..360 when abs_angles_360 given).
-- **`plot_stick_sequence_mpangles(df, output_path, num_frames=8, rel_df=None, abs_df=None)`** — Generates colored stick-figure sequence PNG for the report.
+- **`plot_stick_sequence_mpangles(df, output_path, num_frames=8, rel_df=None, abs_df=None)`** — Generates colored stick-figure sequence PNG for the report; skips frames with nobody detected when choosing which ones to show (`_frames_with_person`).
 - **`generate_html_report(output_dir, video_path, csv_paths, ...)`** — Creates analysis_report.html with angles table and stick figure image.
 - **`generate_batch_html_report(directory_path, results_with_dirs)`** — Creates batch_analysis_report.html in the directory.
 
@@ -177,4 +177,4 @@ AGPL v3.0.
 
 ---
 
-**Last Updated:** 25 August 2026
+**Last Updated:** 17 October 2026

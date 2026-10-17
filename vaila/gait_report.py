@@ -1077,6 +1077,7 @@ def build_report_html(analysis_dir: Path, info: ReportInfo, lang: str = "pt") ->
     extremes = pd.DataFrame()
     cycles_ok = False
     frames_b64: list[tuple[str, str]] = []
+    coronal_frames: list[tuple[str, list[tuple[str, str]]]] = []
     angles = pd.DataFrame()
     times = np.array([])
     if camera is not None:
@@ -1101,6 +1102,15 @@ def build_report_html(analysis_dir: Path, info: ReportInfo, lang: str = "pt") ->
         angle_video = angles_dir / f"angles_{stem}.mp4"
         if angle_video.is_file() and not cam_cycles.empty:
             frames_b64 = grab_frames(angle_video, times, key_frame_times(cam_cycles.iloc[0]))
+            wanted = key_frame_times(cam_cycles.iloc[0])
+            for coronal_cam, coronal_stem, coronal_df in frontal_cams:
+                coronal_video = angles_dir / f"angles_{coronal_stem}.mp4"
+                if not coronal_video.is_file():
+                    continue
+                coronal_times = frontal_plane_times(angles_dir, coronal_stem, len(coronal_df))
+                frames = grab_frames(coronal_video, coronal_times, wanted)
+                if frames:
+                    coronal_frames.append((coronal_cam, frames))
         times = times_f
 
     # Plain-language summary
@@ -1172,6 +1182,15 @@ def build_report_html(analysis_dir: Path, info: ReportInfo, lang: str = "pt") ->
         )
         frames_html = (
             f"<h2>{_esc(t['key_frames'])} — {_esc(camera)}</h2><div class='frames'>{figs}</div>"
+        )
+    for coronal_cam, frames in coronal_frames:
+        figs = "".join(
+            f"<figure><img src='data:image/jpeg;base64,{b}'><figcaption>{_esc(t[label])}</figcaption></figure>"
+            for label, b in frames
+        )
+        frames_html += (
+            f"<h2>{_esc(t['key_frames'])} — {_esc(coronal_cam)} "
+            f"({_esc(t['view_coronal'])})</h2><div class='frames'>{figs}</div>"
         )
 
     skeleton_html = ""
