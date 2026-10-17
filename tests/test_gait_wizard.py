@@ -17,6 +17,54 @@ def _touch_session(folder: Path, cameras=("cam1", "cam2", "cam3")) -> Path:
     return folder
 
 
+# MediaPipe pose landmark order (0..32), used by mpangles.get_vector_landmark.
+_LANDMARK_NAMES = [
+    "nose",
+    "left_eye_inner",
+    "left_eye",
+    "left_eye_outer",
+    "right_eye_inner",
+    "right_eye",
+    "right_eye_outer",
+    "left_ear",
+    "right_ear",
+    "mouth_left",
+    "mouth_right",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_pinky",
+    "right_pinky",
+    "left_index",
+    "right_index",
+    "left_thumb",
+    "right_thumb",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+    "left_heel",
+    "right_heel",
+    "left_foot_index",
+    "right_foot_index",
+]
+
+
+def _landmarks_row(**positions: tuple[float, float]) -> pd.DataFrame:
+    """One-frame pixel-landmarks DataFrame (frame, p0_x, p0_y, ...); unset landmarks are (0, 0)."""
+    cols: dict[str, list[float]] = {"frame": [0]}
+    for i, name in enumerate(_LANDMARK_NAMES):
+        x, y = positions.get(name, (0.0, 0.0))
+        cols[f"p{i}_x"] = [x]
+        cols[f"p{i}_y"] = [y]
+    return pd.DataFrame(cols)
+
+
 def test_session_datetime_from_folder_name(tmp_path):
     folder = tmp_path / "trial01_20261010_094738"
     folder.mkdir()
@@ -81,6 +129,38 @@ def test_default_coronal_cameras_no_saved_value(monkeypatch):
 def test_process_coronal_cameras_noop_without_coronal(tmp_path):
     gw.process_coronal_cameras(tmp_path, [], tmp_path, log=lambda _m: None)
     assert not (tmp_path / "angles").exists()
+
+
+def test_frontal_plane_metrics_pelvic_obliquity_sign():
+    df = _landmarks_row(left_hip=(100, 200), right_hip=(160, 210))
+    out = gw.frontal_plane_metrics(df)
+    expected = np.degrees(np.arctan2(10, 60))
+    assert out["pelvic_obliquity_deg"].iloc[0] == pytest.approx(expected)
+
+
+def test_frontal_plane_metrics_knee_valgus_and_varus_signs():
+    # Right leg, straight down (hip.x == ankle.x); knee offset decides valgus/varus.
+    straight = {"left_hip": (100, 200), "right_hip": (160, 200), "right_ankle": (160, 400)}
+    valgus = _landmarks_row(right_knee=(150, 300), **straight)  # knee shifts toward the midline
+    varus = _landmarks_row(right_knee=(170, 300), **straight)  # knee shifts away from the midline
+
+    out_valgus = gw.frontal_plane_metrics(valgus)["right_knee_deg"].iloc[0]
+    out_varus = gw.frontal_plane_metrics(varus)["right_knee_deg"].iloc[0]
+    expected_magnitude = np.degrees(np.arccos(9900 / 10100.0))
+
+    assert out_valgus == pytest.approx(expected_magnitude)
+    assert out_varus == pytest.approx(-expected_magnitude)
+
+
+def test_frontal_plane_metrics_straight_leg_is_zero():
+    df = _landmarks_row(
+        left_hip=(100, 200),
+        right_hip=(160, 200),
+        right_knee=(160, 300),
+        right_ankle=(160, 400),
+    )
+    out = gw.frontal_plane_metrics(df)
+    assert out["right_knee_deg"].iloc[0] == pytest.approx(0.0)
 
 
 def test_normalize_cycles_resamples_and_converts_knee():

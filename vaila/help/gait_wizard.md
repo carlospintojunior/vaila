@@ -26,9 +26,10 @@ button per screen and no file dialogs or settings to understand:
    next time): **Lateral** (sees the person from the side — goes through
    gait-event/cycle detection), **Coronal (de frente)** (frontal camera — only
    gets a skeleton + angles pass, no gait events: a front view has no
-   sideways walking pass to detect), or **Não usar**. The user also types a
-   participant name/code and clicks **Analisar**. A checklist shows each
-   stage in plain language with the elapsed time:
+   sideways walking pass to detect — plus pelvic obliquity and knee
+   valgus/varus, estimated from the frontal-view landmarks), or **Não usar**.
+   The user also types a participant name/code and clicks **Analisar**. A
+   checklist shows each stage in plain language with the elapsed time:
    MediaPipe pose → gait events and phases (`vaila/gait_auto.py` logic:
    Zeni heel-strike / toe-off, lateral cameras only) → joint angles and the
    **MP Angles video** (skeleton + angles drawn over the person, every
@@ -71,6 +72,7 @@ gait_analysis_YYYYMMDD_HHMMSS/
     joint_angles_cycle.png    hip / knee / ankle over the gait cycle
     angles/angles_<video>.mp4 skeleton + angles video per camera (H.264)
     angles/                   MP Angles CSVs per camera (_rel, _abs_180, _abs_360)
+    angles/<video>_frontal.csv  coronal camera only: pelvic obliquity, knee valgus/varus per frame
     mediapipe/                MediaPipe outputs (CSVs, annotated video)
 ```
 

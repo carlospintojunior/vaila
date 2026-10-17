@@ -119,6 +119,61 @@ def test_stick_sequence_images_missing_dir(tmp_path):
     assert gr.stick_sequence_images(tmp_path / "nope", set()) == []
 
 
+def _frontal_df(n=20):
+    rng = np.random.default_rng(0)
+    return pd.DataFrame(
+        {
+            "frame": np.arange(n),
+            "pelvic_obliquity_deg": rng.normal(1.0, 2.0, n),
+            "left_knee_deg": rng.normal(-1.0, 3.0, n),
+            "right_knee_deg": rng.normal(2.0, 3.0, n),
+        }
+    )
+
+
+def test_frontal_plane_files_discovers_by_camera(tmp_path):
+    angles_dir = tmp_path / "angles"
+    angles_dir.mkdir()
+    (angles_dir / "cam1_trial01_frontal.csv").write_text("frame\n0\n", encoding="utf-8")
+    found = gr.frontal_plane_files(angles_dir)
+    assert [cam for cam, _p in found] == ["cam1"]
+
+
+def test_frontal_plane_files_missing_dir(tmp_path):
+    assert gr.frontal_plane_files(tmp_path / "nope") == []
+
+
+def test_frontal_plane_stats_mean_sd_and_signed_peak():
+    df = pd.DataFrame(
+        {
+            "pelvic_obliquity_deg": [1.0, -2.0, 3.0, -8.0],
+            "left_knee_deg": [0.0, 0.0, 0.0, 0.0],
+            "right_knee_deg": [np.nan, np.nan, np.nan, np.nan],
+        }
+    )
+    stats = gr.frontal_plane_stats(df)
+    assert stats["pelvic_obliquity_deg"]["mean"] == pytest.approx(-1.5)
+    assert stats["pelvic_obliquity_deg"]["peak"] == pytest.approx(-8.0)
+    assert np.isnan(stats["right_knee_deg"]["mean"])
+
+
+def test_frontal_plane_chart_returns_base64_png():
+    data = gr.frontal_plane_chart(_frontal_df(), np.arange(20) / 30.0, "pt")
+    assert data is None or isinstance(data, str)
+    if data:
+        assert len(data) > 100
+
+
+def test_build_report_html_embeds_frontal_plane_section(tmp_path):
+    out = _analysis_dir(tmp_path)
+    _frontal_df().to_csv(out / "angles" / "cam1_trial01_frontal.csv", index=False)
+    text = gr.build_report_html(out, gr.ReportInfo("Paciente X"), "pt")
+    t = gr.TEXT["pt"]
+    assert f"{t['frontal_plane']} — cam1" in text
+    assert t["pelvic_obliquity_metric"] in text
+    assert t["right_knee_metric"] in text
+
+
 def test_reference_status_and_formatting():
     assert gr.reference_status("stance_pct", 60) == "ok"
     assert gr.reference_status("stance_pct", 67) == "above"
