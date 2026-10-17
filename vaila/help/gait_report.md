@@ -24,7 +24,8 @@ analysis folder.
   reference range are shown in bold and colour.
 - Hip, knee and ankle angles over the gait cycle (mean ± SD per side).
 - Four frames of the MP Angles video: heel strike, mid-stance, toe-off and
-  mid-swing.
+  mid-swing, for the main lateral camera and, when present, for the coronal
+  camera too (same instants, grabbed from its own angle video).
 - The MP Angles skeleton-sequence image for every analysed camera (one image
   per camera, captioned "side view" or "frontal view (coronal)"): a grid of
   frames across the walk with the detected skeleton and joint angle values —

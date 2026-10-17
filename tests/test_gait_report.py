@@ -1,5 +1,6 @@
 """Tests for vaila/gait_report.py (printable gait report, PT/EN)."""
 
+import cv2
 import numpy as np
 import pandas as pd
 import pytest
@@ -162,6 +163,24 @@ def test_frontal_plane_chart_returns_base64_png():
     assert data is None or isinstance(data, str)
     if data:
         assert len(data) > 100
+
+
+def _write_video(path, n_frames=100, size=(64, 48), fps=30.0):
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
+    for _ in range(n_frames):
+        writer.write(np.zeros((size[1], size[0], 3), dtype=np.uint8))
+    writer.release()
+
+
+def test_build_report_html_embeds_coronal_key_frames(tmp_path):
+    out = _analysis_dir(tmp_path)
+    _write_video(out / "angles" / "angles_cam2_trial01.mp4")
+    _frontal_df(n=100).to_csv(out / "angles" / "cam1_trial01_frontal.csv", index=False)
+    _write_video(out / "angles" / "angles_cam1_trial01.mp4")
+    text = gr.build_report_html(out, gr.ReportInfo("Paciente X"), "pt")
+    t = gr.TEXT["pt"]
+    assert f"{t['key_frames']} — cam2" in text
+    assert f"{t['key_frames']} — cam1 ({t['view_coronal']})" in text
 
 
 def test_build_report_html_embeds_frontal_plane_section(tmp_path):
