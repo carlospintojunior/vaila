@@ -4,8 +4,8 @@ No test spawns a real ffmpeg process or opens a real camera (subprocess.Popen
 and cv2 access are monkeypatched throughout), matching the repo-wide pattern
 for hardware-dependent video modules.
 
-Update Date: 26 September 2026
-Version: 0.4.5
+Update Date: 16 October 2026
+Version: 0.4.9
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def test_build_record_command_linux_uses_v4l2_input_format():
     assert cmd[cmd.index("-input_format") + 1] == "mjpeg"
     assert "-i" in cmd
     assert cmd[cmd.index("-i") + 1] == "/dev/video2"
-    assert cmd[-3:] == ["-c:v", "copy", "/tmp/out/cam1_trial.mkv"]
+    assert cmd[-3:] == ["-c:v", "copy", str(Path("/tmp/out/cam1_trial.mkv"))]
 
 
 def test_build_record_command_macos_uses_vcodec_not_input_format():
@@ -154,6 +154,38 @@ def test_parse_dshow_listing_disambiguates_duplicate_display_names():
     assert [d.id for d in devices] == ["@device_pnp_A", "@device_pnp_B"]
     assert all(d.label == "Integrated Camera" for d in devices)
     assert all(d.backend == "dshow" for d in devices)
+    assert [d.cv_index for d in devices] == [0, 1]
+
+
+def test_parse_dshow_listing_ffmpeg9_format_without_section_headers():
+    """FFmpeg 9 (Windows 10, three DV20 cameras) prints no section headers;
+    each entry is tagged (video)/(audio)/(none) instead."""
+    stderr_text = (
+        '[in#0 @ 0001] "DV20 USB CAMERA" (video)\n'
+        '[in#0 @ 0001]   Alternative name "@device_pnp_\\\\?\\usb#vid_4c4a#6&65d2d66"\n'
+        '[in#0 @ 0001] "DV20 USB CAMERA" (video)\n'
+        '[in#0 @ 0001]   Alternative name "@device_pnp_\\\\?\\usb#vid_4c4a#7&2eff8ecc"\n'
+        '[in#0 @ 0001] "OBS Virtual Camera" (none)\n'
+        '[in#0 @ 0001]   Alternative name "@device_sw_{860BB310}"\n'
+        '[in#0 @ 0001] "DV20 USB CAMERA" (video)\n'
+        '[in#0 @ 0001]   Alternative name "@device_pnp_\\\\?\\usb#vid_4c4a#6&8eecb27"\n'
+        '[in#0 @ 0001] "Microphone (10- USB Audio)" (audio)\n'
+        '[in#0 @ 0001]   Alternative name "@device_cm_{33D9A762}\\wave_{ECF78A94}"\n'
+        "Error opening input file dummy.\n"
+    )
+    devices = multicam_recorder._parse_dshow_listing(stderr_text)
+    assert [d.id.rsplit("#", 1)[-1] for d in devices] == ["6&65d2d66", "7&2eff8ecc", "6&8eecb27"]
+    assert all(d.label == "DV20 USB CAMERA" for d in devices)
+    # OBS Virtual Camera is not a camera here but still takes a DirectShow index.
+    assert [d.cv_index for d in devices] == [0, 1, 3]
+
+
+def test_preview_target_uses_listing_index_then_list_position():
+    with_index = multicam_recorder.CameraDevice(id="@a", label="A", backend="dshow", cv_index=3)
+    without = multicam_recorder.CameraDevice(id="0", label="B", backend="avfoundation")
+    assert multicam_recorder.preview_target(with_index, 1) == 3
+    assert multicam_recorder.preview_target(without, 1) == 1
+    assert multicam_recorder.preview_target(_camera("v4l2", "/dev/video2"), 0) == "/dev/video2"
 
 
 # ── recording controller (fake Popen, no real subprocess) ───────────────────
@@ -250,6 +282,27 @@ def test_controller_poll_disconnected_reports_dead_process_once(monkeypatch, tmp
     assert dead[0].camera.id == camera.id
 
     assert controller.poll_disconnected() == []
+
+
+def test_controller_sends_ffmpeg_stderr_to_a_log_file_not_a_pipe(monkeypatch, tmp_path):
+    """An unread stderr PIPE fills up (~4 KB on Windows) and freezes ffmpeg."""
+    seen: dict = {}
+
+    def fake_popen(*args, **kwargs):
+        seen.update(kwargs)
+        kwargs["stderr"].write(b"frame=  1\rframe=  2\nI/O error\n")
+        return _FakePopenProcess()
+
+    monkeypatch.setattr(multicam_recorder.subprocess, "Popen", fake_popen)
+    controller = multicam_recorder.MulticamRecorderController("ffmpeg")
+    controller.start([(_camera("v4l2"), 30, "1280x720")], tmp_path / "session", "trial")
+
+    assert seen["stderr"] is not subprocess.PIPE
+    rec = next(iter(controller._active.values()))
+    controller.stop(timeout=1)
+    assert rec.log_file is not None and rec.log_file.closed
+    assert rec.log_tail(2) == "frame=  2\nI/O error"
+    controller.cleanup_preview_snapshots()
 
 
 # ── parse_v4l2_mjpeg_sizes ───────────────────────────────────────────────────

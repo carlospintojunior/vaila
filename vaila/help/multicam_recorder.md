@@ -4,7 +4,7 @@
 
 - **Category:** Tools
 - **File:** `vaila/multicam_recorder.py`
-- **Version:** 0.4.8
+- **Version:** 0.4.9
 - **GUI Interface:** ✅ Yes
 - **CLI Interface:** ❌ No (GUI only; prints an equivalent CLI command per camera)
 
@@ -56,7 +56,16 @@ uv run python vaila/multicam_recorder.py
 
 - Windows DirectShow duplicate device names (two identical webcam models) are
   disambiguated via the device's `@device_pnp_...` alternative name, not by a
-  friendlier label.
+  friendlier label — the GUI lists them as e.g. three rows of `DV20 USB CAMERA`,
+  in the order Windows enumerates them.
+- **Windows (validated 16/10/2026, Windows 10, FFmpeg 9.0.2, 3× DV20 at
+  1280x720/30 fps)**: both FFmpeg listing formats are understood (older
+  "DirectShow video devices" headers and the newer per-entry `(video)` tags);
+  the live preview opens each camera through OpenCV's DirectShow backend at the
+  same index ffmpeg uses, so each tile shows the right camera. A 60 s session
+  recorded 1805–1806 frames per camera. Install FFmpeg first
+  (`winget install --id Gyan.FFmpeg -e`, or the *vailá* Windows installer run as
+  Administrator).
 - No hardware frame-level synchronization between cameras — relies on
   near-simultaneous process launch, same as manual `&`/`wait` shell capture.
 - **USB bandwidth (Linux)**: some cheap UVC cameras (e.g. DV20) reserve almost
@@ -67,9 +76,17 @@ uv run python vaila/multicam_recorder.py
   camera per controller (`v4l2-ctl --list-devices` shows the controller in each
   camera's `usb-0000:XX:XX.X` path). Stopping another camera's preview frees the
   bandwidth, and clicking **Preview** again retries without restarting.
+- **USB bandwidth (Windows / any xHCI laptop)**: the limit is **one DV20 per
+  physical USB port** (each root port has its own USB 2.0 bandwidth). A hub
+  shares its single port, so it can hold at most one DV20; the second one on
+  the same hub fails with `Could not run graph`. Device Manager → View →
+  *Devices by connection* shows which cameras share a port.
+- If a camera's ffmpeg stops during a recording, its Status turns
+  **disconnected** and the last lines of its ffmpeg output are printed in the
+  terminal.
 
 ---
 
-📅 **Updated:** 12/10/2026
+📅 **Updated:** 16/10/2026
 🔗 **Part of vailá - Multimodal Toolbox**
 🌐 [GitHub Repository](https://github.com/vaila-multimodaltoolbox/vaila)
