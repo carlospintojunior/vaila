@@ -1,5 +1,6 @@
 """Tests for vaila/gait_report.py (printable gait report, PT/EN)."""
 
+import cv2
 import numpy as np
 import pandas as pd
 import pytest
@@ -105,6 +106,93 @@ def test_cycle_pattern_identical_cycles_have_no_variability():
     assert n == 4 and np.nanmax(sd) < 0.5 and mean.max() == pytest.approx(60, abs=2)
 
 
+def test_stick_sequence_images_flags_lateral_vs_coronal(tmp_path):
+    angles_dir = tmp_path / "angles"
+    angles_dir.mkdir()
+    (angles_dir / "cam2_trial01_stick_sequence.png").write_bytes(b"\x89PNG")
+    (angles_dir / "cam1_trial01_stick_sequence.png").write_bytes(b"\x89PNG")
+    images = gr.stick_sequence_images(angles_dir, {"cam2"})
+    found = {(cam, lateral) for cam, lateral, _b64 in images}
+    assert found == {("cam1", False), ("cam2", True)}
+
+
+def test_stick_sequence_images_missing_dir(tmp_path):
+    assert gr.stick_sequence_images(tmp_path / "nope", set()) == []
+
+
+def _frontal_df(n=20):
+    rng = np.random.default_rng(0)
+    return pd.DataFrame(
+        {
+            "frame": np.arange(n),
+            "pelvic_obliquity_deg": rng.normal(1.0, 2.0, n),
+            "left_knee_deg": rng.normal(-1.0, 3.0, n),
+            "right_knee_deg": rng.normal(2.0, 3.0, n),
+        }
+    )
+
+
+def test_frontal_plane_files_discovers_by_camera(tmp_path):
+    angles_dir = tmp_path / "angles"
+    angles_dir.mkdir()
+    (angles_dir / "cam1_trial01_frontal.csv").write_text("frame\n0\n", encoding="utf-8")
+    found = gr.frontal_plane_files(angles_dir)
+    assert [cam for cam, _p in found] == ["cam1"]
+
+
+def test_frontal_plane_files_missing_dir(tmp_path):
+    assert gr.frontal_plane_files(tmp_path / "nope") == []
+
+
+def test_frontal_plane_stats_mean_sd_and_signed_peak():
+    df = pd.DataFrame(
+        {
+            "pelvic_obliquity_deg": [1.0, -2.0, 3.0, -8.0],
+            "left_knee_deg": [0.0, 0.0, 0.0, 0.0],
+            "right_knee_deg": [np.nan, np.nan, np.nan, np.nan],
+        }
+    )
+    stats = gr.frontal_plane_stats(df)
+    assert stats["pelvic_obliquity_deg"]["mean"] == pytest.approx(-1.5)
+    assert stats["pelvic_obliquity_deg"]["peak"] == pytest.approx(-8.0)
+    assert np.isnan(stats["right_knee_deg"]["mean"])
+
+
+def test_frontal_plane_chart_returns_base64_png():
+    data = gr.frontal_plane_chart(_frontal_df(), np.arange(20) / 30.0, "pt")
+    assert data is None or isinstance(data, str)
+    if data:
+        assert len(data) > 100
+
+
+def _write_video(path, n_frames=100, size=(64, 48), fps=30.0):
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
+    for _ in range(n_frames):
+        writer.write(np.zeros((size[1], size[0], 3), dtype=np.uint8))
+    writer.release()
+
+
+def test_build_report_html_embeds_coronal_key_frames(tmp_path):
+    out = _analysis_dir(tmp_path)
+    _write_video(out / "angles" / "angles_cam2_trial01.mp4")
+    _frontal_df(n=100).to_csv(out / "angles" / "cam1_trial01_frontal.csv", index=False)
+    _write_video(out / "angles" / "angles_cam1_trial01.mp4")
+    text = gr.build_report_html(out, gr.ReportInfo("Paciente X"), "pt")
+    t = gr.TEXT["pt"]
+    assert f"{t['key_frames']} — cam2" in text
+    assert f"{t['key_frames']} — cam1 ({t['view_coronal']})" in text
+
+
+def test_build_report_html_embeds_frontal_plane_section(tmp_path):
+    out = _analysis_dir(tmp_path)
+    _frontal_df().to_csv(out / "angles" / "cam1_trial01_frontal.csv", index=False)
+    text = gr.build_report_html(out, gr.ReportInfo("Paciente X"), "pt")
+    t = gr.TEXT["pt"]
+    assert f"{t['frontal_plane']} — cam1" in text
+    assert t["pelvic_obliquity_metric"] in text
+    assert t["right_knee_metric"] in text
+
+
 def test_reference_status_and_formatting():
     assert gr.reference_status("stance_pct", 60) == "ok"
     assert gr.reference_status("stance_pct", 67) == "above"
@@ -154,6 +242,17 @@ def test_build_report_html(tmp_path, lang):
     assert text.count("<h3>") >= 3  # right / left / neck statistics tables
     assert t["affected_tag"] in text
     assert "window.print()" in text
+
+
+def test_build_report_html_embeds_skeleton_sequences(tmp_path):
+    out = _analysis_dir(tmp_path)
+    (out / "angles" / "cam2_trial01_stick_sequence.png").write_bytes(b"\x89PNG")
+    (out / "angles" / "cam1_trial01_stick_sequence.png").write_bytes(b"\x89PNG")
+    text = gr.build_report_html(out, gr.ReportInfo("Paciente X"), "pt")
+    t = gr.TEXT["pt"]
+    assert t["skeleton_overview"] in text
+    assert f"cam2 — {t['view_lateral']}" in text
+    assert f"cam1 — {t['view_coronal']}" in text
 
 
 def test_write_reports_without_pdf(tmp_path):

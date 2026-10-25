@@ -4,7 +4,7 @@
 
 - **Category:** Tools
 - **File:** `vaila/gait_report.py`
-- **Version:** 0.4.8
+- **Version:** 0.4.9
 - **GUI Interface:** ✅ Yes (built automatically by **Marcha Fácil**; button "Relatório para imprimir" on its results screen)
 - **CLI Interface:** ✅ Yes (`uv run python vaila/gait_report.py --analysis <gait_analysis_dir>`)
 - **Languages:** Portuguese and English
@@ -24,7 +24,13 @@ analysis folder.
   reference range are shown in bold and colour.
 - Hip, knee and ankle angles over the gait cycle (mean ± SD per side).
 - Four frames of the MP Angles video: heel strike, mid-stance, toe-off and
-  mid-swing.
+  mid-swing, for the main lateral camera and, when present, for the coronal
+  camera too (same instants, grabbed from its own angle video).
+- The MP Angles skeleton-sequence image for every analysed camera (one image
+  per camera, captioned "side view" or "frontal view (coronal)"): a grid of
+  frames across the walk with the detected skeleton and joint angle values —
+  built by `mpangles.plot_stick_sequence_mpangles`, already generated when the
+  skeleton + angles video is rendered.
 
 **Page 2, technical (for the therapist)**
 - Range of motion per joint and side, compared with references.
@@ -32,6 +38,13 @@ analysis folder.
   15-column table. Each table gives the mean, SD, minimum and maximum with the
   time they happen, range, between-cycle variability and the number of extreme
   points. The affected side is tagged.
+- **Frontal plane (coronal camera), when present**: pelvic obliquity and knee
+  valgus/varus — mean ± SD and signed peak, plus a time chart. Positive =
+  right pelvic drop / valgus (knee toward the midline); negative = left
+  pelvic drop / varus (away from the midline). Uncalibrated 2D monocular
+  estimate from `gait_wizard.frontal_plane_metrics`: sensitive to camera
+  alignment and body rotation, meant as a screening aid, not an absolute
+  measure — the report says so explicitly.
 - **Points of extreme oscillation**, in bold red, with the time to check in the
   video:
   - *off pattern*: the angle departs from the mean of the person's **other**
@@ -94,6 +107,6 @@ uv run python vaila/gait_report.py --analysis <gait_analysis_dir> \
 
 ---
 
-📅 **Updated:** 12/10/2026
+📅 **Updated:** 17/10/2026
 🔗 **Part of _vailá_ - Multimodal Toolbox**
 🌐 [GitHub Repository](https://github.com/vaila-multimodaltoolbox/vaila)

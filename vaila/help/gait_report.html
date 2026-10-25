@@ -90,7 +90,7 @@
 <ul>
 <li><b>Category:</b> Tools</li>
 <li><b>File:</b> <code>vaila/gait_report.py</code></li>
-<li><b>Version:</b> 0.4.8</li>
+<li><b>Version:</b> 0.4.9</li>
 <li><b>GUI Interface:</b> ✅ Yes (built automatically by <b>Marcha Fácil</b>; button "Relatório para imprimir" on its results screen)</li>
 <li><b>CLI Interface:</b> ✅ Yes (<code>uv run python vaila/gait_report.py --analysis &lt;gait_analysis_dir&gt;</code>)</li>
 <li><b>Languages:</b> Portuguese and English</li>
@@ -103,12 +103,14 @@
 <li>A plain-language summary. Each parameter is compared with its reference range, with a short explanation when it is outside the range (e.g. "the foot stays on the floor longer (seeking stability)").</li>
 <li>Temporal parameters: cadence, stance, swing, double support, stride time, left/right difference and peak knee flexion in swing. Values outside the reference range are shown in bold and colour.</li>
 <li>Hip, knee and ankle angles over the gait cycle (mean ± SD per side).</li>
-<li>Four frames of the MP Angles video: heel strike, mid-stance, toe-off and mid-swing.</li>
+<li>Four frames of the MP Angles video: heel strike, mid-stance, toe-off and mid-swing, for the main lateral camera and, when present, for the coronal camera too (same instants, grabbed from its own angle video).</li>
+<li>The MP Angles skeleton-sequence image for every analysed camera (one image per camera, captioned "side view" or "frontal view (coronal)"): a grid of frames across the walk with the detected skeleton and joint angle values — built by <code>mpangles.plot_stick_sequence_mpangles</code>, already generated when the skeleton + angles video is rendered.</li>
 </ul>
 <p><b>Page 2, technical (for the therapist)</b></p>
 <ul>
 <li>Range of motion per joint and side, compared with references.</li>
 <li><b>MP Angles statistics split into Right / Left / Neck tables</b> instead of one 15-column table. Each table gives the mean, SD, minimum and maximum with the time they happen, range, between-cycle variability and the number of extreme points. The affected side is tagged.</li>
+<li><b>Frontal plane (coronal camera), when present</b>: pelvic obliquity and knee valgus/varus — mean ± SD and signed peak, plus a time chart. Positive = right pelvic drop / valgus (knee toward the midline); negative = left pelvic drop / varus (away from the midline). Uncalibrated 2D monocular estimate from <code>gait_wizard.frontal_plane_metrics</code>: sensitive to camera alignment and body rotation, meant as a screening aid, not an absolute measure — the report says so explicitly.</li>
 <li><b>Points of extreme oscillation</b>, in bold red, with the time to check in the video:</li>
 <li><i>off pattern</i>: the angle departs from the mean of the person's <b>other</b> cycles, at the same % of the cycle, by more than 2.5 between-cycle SDs (and at least 10°). This needs at least 3 cycles of that side. The cycle under test is left out of its own reference, so an odd cycle cannot hide itself. A z-score over the whole walk is <b>not</b> used, because it flags the normal ~60° knee flexion of swing.</li>
 <li><i>abrupt change</i>: a frame-to-frame jump larger than max(15°, 6 × the median jump). This can be instability, compensation or a tracking error.</li>
@@ -133,7 +135,7 @@ gait_report_print_en.html / .pdf      English</pre>
 <li>With fewer than 3 cycles per side, only abrupt changes are checked, and the report says so.</li>
 <li>2D angles in the camera plane, with no calibration.</li>
 </ul>
-<div class="footer"><p>📅 Updated: 12/10/2026</p><p>🔗 Part of <i>vailá</i> - Multimodal Toolbox</p>
+<div class="footer"><p>📅 Updated: 17/10/2026</p><p>🔗 Part of <i>vailá</i> - Multimodal Toolbox</p>
 <p>🌐 <a href="https://github.com/vaila-multimodaltoolbox/vaila">GitHub Repository</a></p></div>
 </div>
 </body>

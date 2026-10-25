@@ -6,8 +6,8 @@ Author: Carlos Pinto Jr
 Email: carlos@vulcanum.com.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 12 October 2026
-Update Date: 16 October 2026
-Version: 0.4.8
+Update Date: 17 October 2026
+Version: 0.4.9
 
 Description:
 A step-by-step wizard (UI in Portuguese) that takes a user with no computer
@@ -23,11 +23,17 @@ per screen:
 2. Corte         - opens "Cut Cameras" with the session already loaded and
                    moves on by itself when the cut finishes; or "use the
                    whole video", or reuse a previous cut.
-3. Processamento - the user ticks the side-view (lateral) cameras and clicks
+3. Processamento - the user identifies each camera's role (side-view /
+                   "lateral", frontal / "coronal", or not used) and clicks
                    "Analisar": MediaPipe + automatic gait events/phases
-                   (gait_auto.py) + MP Angles joint angles and the MP Angles
-                   skeleton + angles video (mpangles.py), with a
-                   plain-language checklist and elapsed time.
+                   (gait_auto.py, lateral cameras only) + MP Angles joint
+                   angles and the MP Angles skeleton + angles video
+                   (mpangles.py) for every lateral camera, plus a MediaPipe
+                   + MP Angles skeleton pass (video + stick-figure image,
+                   no gait-cycle detection) plus frontal-plane metrics
+                   (pelvic obliquity, knee valgus/varus) for the coronal
+                   camera when one is marked, with a plain-language
+                   checklist and elapsed time.
 4. Resultados    - a few big numbers (cadence, stance/swing, stride time,
                    symmetry), joint angles over the gait cycle, plain advice
                    when the recording has problems, a big button that plays
@@ -43,6 +49,7 @@ gait_analysis_YYYYMMDD_HHMMSS/
     angles/angles_<video>.mp4                            skeleton + angles video (H.264)
     angles/<video>_rel.csv, _abs_180.csv, _abs_360.csv   (MP Angles)
     angles/<video>.csv       landmarks low-passed at 6 Hz (input of MP Angles)
+    angles/<video>_frontal.csv  coronal camera only: pelvic obliquity, knee valgus/varus per frame
     joint_angles_cycle.csv   mean/SD per % of the gait cycle
     joint_angles_cycle.png   hip / knee / ankle over the gait cycle
 
@@ -83,6 +90,8 @@ try:
         GaitResult,
         _video_size,
         analyze_session_full,
+        run_mediapipe,
+        select_camera_videos,
         symmetry_index,
     )
     from .gait_report import ReportInfo, write_reports
@@ -100,6 +109,8 @@ except ImportError:
         GaitResult,
         _video_size,
         analyze_session_full,
+        run_mediapipe,
+        select_camera_videos,
         symmetry_index,
     )
     from gait_report import ReportInfo, write_reports  # ty: ignore[unresolved-import]
@@ -135,6 +146,10 @@ FEET_CUT_LIMIT = 0.3
 FEW_CYCLES = 3
 AFFECTED_SIDES = (("Nenhum", ""), ("Direito", "right"), ("Esquerdo", "left"), ("Ambos", "both"))
 REPORT_LANGS = (("Português", "pt"), ("English", "en"))
+# Camera role in the Processamento step: "lateral" goes through gait-cycle
+# detection (gait_auto.py); "coronal" only gets MediaPipe + the MP Angles
+# skeleton video/image (no gait events); "nao" is not analysed.
+CAMERA_ROLES = (("Lateral", "lateral"), ("Coronal (de frente)", "coronal"), ("Não usar", "nao"))
 
 
 # ── Sessions & saved progress ────────────────────────────────────────────────
@@ -229,6 +244,12 @@ def default_lateral_cameras(available: list[str]) -> list[str]:
         if chosen:
             return chosen
     return list(available)
+
+
+def default_coronal_cameras(available: list[str], lateral: list[str]) -> list[str]:
+    """Remembered coronal camera(s), restricted to cameras not already marked lateral."""
+    saved = [c for c in load_config_value(CONFIG_SECTION, "coronal_cameras").split(",") if c]
+    return [c for c in saved if c in available and c not in lateral]
 
 
 # ── Joint angles over the gait cycle (MP Angles) ─────────────────────────────
@@ -401,6 +422,123 @@ def compute_cycle_angles(
     return rows
 
 
+def frontal_plane_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-frame frontal-plane deviations from a coronal camera's pixel landmarks.
+
+    ``pelvic_obliquity_deg``: signed, positive = right hip lower (right pelvic
+    drop), negative = left pelvic drop; 0 = level pelvis.
+    ``left_knee_deg`` / ``right_knee_deg``: signed, positive = valgus (knee
+    deviates toward the body midline), negative = varus (knee deviates away
+    from it); 0 = straight leg in the frontal plane. Magnitude is the angle
+    between the thigh (hip->knee) and shank (knee->ankle) vectors; the sign
+    comes from which side of the straight hip-ankle line the knee falls on,
+    relative to the midpoint between the two hips.
+
+    Approximate 2D monocular measures, with no calibration: sensitive to the
+    person's rotation relative to the camera. Meaningful only as a screening
+    aid when the coronal camera is reasonably square-on to the walkway.
+    """
+    try:
+        from .mpangles import get_vector_landmark
+    except ImportError:
+        from mpangles import get_vector_landmark  # ty: ignore[unresolved-import]
+
+    n = len(df)
+    left_hip = get_vector_landmark(df, "left_hip")
+    right_hip = get_vector_landmark(df, "right_hip")
+    midline_x = (left_hip[:, 0] + right_hip[:, 0]) / 2.0
+
+    dx = np.abs(right_hip[:, 0] - left_hip[:, 0])
+    dy = right_hip[:, 1] - left_hip[:, 1]
+    pelvic_obliquity = np.degrees(np.arctan2(dy, dx))
+
+    def knee_deviation(side: str) -> np.ndarray:
+        hip = get_vector_landmark(df, f"{side}_hip")
+        knee = get_vector_landmark(df, f"{side}_knee")
+        ankle = get_vector_landmark(df, f"{side}_ankle")
+        thigh = knee - hip
+        shank = ankle - knee
+        norm_t = np.linalg.norm(thigh, axis=1)
+        norm_s = np.linalg.norm(shank, axis=1)
+        magnitude = np.full(n, np.nan)
+        valid = (norm_t > 0) & (norm_s > 0)
+        cos_a = np.sum(thigh[valid] * shank[valid], axis=1) / (norm_t[valid] * norm_s[valid])
+        magnitude[valid] = np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0)))
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            t = (knee[:, 1] - hip[:, 1]) / (ankle[:, 1] - hip[:, 1])
+        expected_knee_x = hip[:, 0] + t * (ankle[:, 0] - hip[:, 0])
+        offset = knee[:, 0] - expected_knee_x
+        medial_sign = np.where(midline_x >= hip[:, 0], 1.0, -1.0)
+        signed = offset * medial_sign
+        sign = np.where(np.isfinite(signed), np.where(signed >= 0, 1.0, -1.0), np.nan)
+        return sign * magnitude
+
+    return pd.DataFrame(
+        {
+            "frame": df.iloc[:, 0].to_numpy(),
+            "pelvic_obliquity_deg": pelvic_obliquity,
+            "left_knee_deg": knee_deviation("left"),
+            "right_knee_deg": knee_deviation("right"),
+        }
+    )
+
+
+def process_coronal_cameras(
+    source_dir: Path,
+    coronal_cameras: list[str],
+    out_dir: Path,
+    log: Callable[[str], None] = print,
+) -> None:
+    """MediaPipe + MP Angles skeleton video/image for the coronal (frontal) camera(s).
+
+    No gait-cycle detection here: ``analyze_session_full`` finds walking passes
+    from horizontal displacement across the image, which a frontal camera does
+    not show. This renders the skeleton + angles video and the MP Angles
+    stick-figure sequence image (``angles/<stem>_stick_sequence.png``), and
+    writes frontal-plane metrics (pelvic obliquity, knee valgus/varus) to
+    ``angles/<stem>_frontal.csv`` — all picked up by ``gait_report.py``.
+    """
+    if not coronal_cameras:
+        return
+    try:
+        from .mpangles import process_video_with_visualization
+    except ImportError:
+        from mpangles import process_video_with_visualization  # ty: ignore[unresolved-import]
+
+    try:
+        videos = select_camera_videos(source_dir, coronal_cameras)
+    except FileNotFoundError as exc:
+        log(f"Coronal camera: {exc}")
+        return
+    log(f"Coronal camera(s): {', '.join(v.name for v in videos)}")
+    run = run_mediapipe(videos, out_dir / "mediapipe", log)
+    angles_dir = out_dir / "angles"
+    angles_dir.mkdir(exist_ok=True)
+    for video in videos:
+        csv = run / video.stem / f"{video.stem}_pixel_vaila.csv"
+        if not csv.is_file():
+            log(f"MP Angles: {csv.name} not found, skipping {video.name}")
+            continue
+        _w, _h, count, fps = _video_size(video)
+        times = read_frame_times(video, count, fps)
+        fs = 1.0 / float(np.median(np.diff(times))) if len(times) > 1 else fps
+        smooth_csv = angles_dir / f"{video.stem}.csv"
+        smooth_landmarks_csv(csv, smooth_csv, fs)
+        log(f"Frontal-plane metrics: pelvic obliquity and knee valgus/varus for {video.name}")
+        with contextlib.suppress(Exception):
+            frontal = frontal_plane_metrics(pd.read_csv(smooth_csv))
+            frontal.to_csv(angles_dir / f"{video.stem}_frontal.csv", index=False)
+        log(f"MP Angles: rendering the frontal-view skeleton for {video.name}")
+        with contextlib.suppress(Exception):
+            process_video_with_visualization(
+                str(video), str(smooth_csv), str(angles_dir), {"enabled": False}
+            )
+        rendered = angles_dir / f"angles_{video.name}"
+        if rendered.is_file():
+            to_h264(rendered, log)
+
+
 def angle_videos(out_dir: Path, passes: dict[str, int] | None = None) -> list[tuple[str, Path]]:
     """``[(camera, angles_<video>.mp4)]``, cameras with valid walking passes first."""
     found = [
@@ -518,8 +656,14 @@ def run_pipeline(
     log: Callable[[str], None] = print,
     stage: Callable[[int], None] = lambda _i: None,
     info: ReportInfo | None = None,
+    coronal_cameras: list[str] | None = None,
 ) -> GaitResult:
-    """MediaPipe -> gait events/phases -> joint angles -> reports. ``stage(i)`` marks progress."""
+    """MediaPipe -> gait events/phases -> joint angles -> reports. ``stage(i)`` marks progress.
+
+    ``coronal_cameras`` (frontal/coronal-plane cameras) skip gait-cycle
+    detection and only get a MediaPipe + MP Angles skeleton pass, for the
+    report's skeleton-overview section.
+    """
 
     def gait_log(msg: str) -> None:
         log(msg)
@@ -530,6 +674,7 @@ def run_pipeline(
     gait = analyze_session_full(source_dir, cameras, participant, log=gait_log)
     stage(2)
     rows = compute_cycle_angles(gait, log)
+    process_coronal_cameras(source_dir, coronal_cameras or [], gait.out_dir, log)
     stage(3)
     cycle_angle_table(rows).to_csv(gait.out_dir / "joint_angles_cycle.csv", index=False)
     png = gait.out_dir / "joint_angles_cycle.png"
@@ -1068,12 +1213,15 @@ class GaitWizardApp:
         assert self.session is not None and self.source_dir is not None
         self._title(
             "Analisar a caminhada",
-            "Marque as câmeras que filmam a pessoa DE LADO e clique em “Analisar”. "
-            "O computador faz o resto; isso pode levar alguns minutos.",
+            "Identifique cada câmera (lateral, coronal/de frente, ou não usar) e clique em "
+            "“Analisar”. O computador faz o resto; isso pode levar alguns minutos.",
         )
         videos = _session_videos(self.source_dir)
         available = [camera_name(v) for v in videos]
         chosen = self.session.state.get("cameras") or default_lateral_cameras(available)
+        chosen_coronal = self.session.state.get("coronal_cameras") or default_coronal_cameras(
+            available, chosen
+        )
 
         state = self.session.state
         form = ttk.Frame(self.body, style="W.TFrame")
@@ -1090,7 +1238,7 @@ class GaitWizardApp:
         )
         lang = state.get("report_lang") or load_config_value(CONFIG_SECTION, "report_lang") or "pt"
         self.lang_var = tk.StringVar(value={v: k for k, v in REPORT_LANGS}.get(lang, "Português"))
-        self._process_inputs: list[ttk.Entry | ttk.Checkbutton | ttk.Combobox] = []
+        self._process_inputs: list[ttk.Entry | ttk.Combobox] = []
         fields = (
             ("Participante (nome ou código)", ttk.Entry, self.participant_var, None, 30),
             ("Idade", ttk.Entry, self.age_var, None, 6),
@@ -1120,7 +1268,8 @@ class GaitWizardApp:
 
         cams = ttk.Frame(self.body, style="W.TFrame")
         cams.pack(fill="x")
-        self.camera_vars: dict[str, tk.BooleanVar] = {}
+        self.camera_vars: dict[str, tk.StringVar] = {}
+        role_to_label = {role: label for label, role in CAMERA_ROLES}
         from PIL import ImageTk
 
         for video in videos:
@@ -1132,13 +1281,20 @@ class GaitWizardApp:
                 photo = ImageTk.PhotoImage(image, master=self.window)
                 self._images.append(photo)
                 ttk.Label(cell, image=photo, style="W.TLabel").pack()
-            var = tk.BooleanVar(value=name in chosen)
+            ttk.Label(cell, text=name, style="W.TLabel").pack()
+            role = "coronal" if name in chosen_coronal else "lateral" if name in chosen else "nao"
+            var = tk.StringVar(value=role_to_label[role])
             self.camera_vars[name] = var
-            check = ttk.Checkbutton(
-                cell, text=f"{name} — de lado", variable=var, style="W.TCheckbutton"
+            combo = ttk.Combobox(
+                cell,
+                textvariable=var,
+                values=[k for k, _ in CAMERA_ROLES],
+                width=18,
+                state="readonly",
+                font=(FONT, 10),
             )
-            check.pack()
-            self._process_inputs.append(check)
+            combo.pack()
+            self._process_inputs.append(combo)
 
         self.progress_frame = ttk.Frame(self.body, style="W.TFrame")
         self.progress_frame.pack(fill="both", expand=True, pady=(14, 0))
@@ -1146,16 +1302,20 @@ class GaitWizardApp:
 
     def _start_processing(self) -> None:
         assert self.session is not None and self.source_dir is not None
-        cameras = [c for c, v in self.camera_vars.items() if v.get()]
+        label_to_role = dict(CAMERA_ROLES)
+        roles = {c: label_to_role.get(v.get(), "nao") for c, v in self.camera_vars.items()}
+        cameras = [c for c, role in roles.items() if role == "lateral"]
+        coronal_cameras = [c for c, role in roles.items() if role == "coronal"]
         if not cameras:
             messagebox.showinfo(
                 "Marcha Fácil",
-                "Marque pelo menos uma câmera que filma de lado.",
+                "Marque pelo menos uma câmera como Lateral (de lado).",
                 parent=self.window,
             )
             return
         participant = self.participant_var.get().strip()
         save_config_value(CONFIG_SECTION, "lateral_cameras", ",".join(cameras))
+        save_config_value(CONFIG_SECTION, "coronal_cameras", ",".join(coronal_cameras))
         fields = {
             "participant": participant,
             "age": self.age_var.get().strip(),
@@ -1167,15 +1327,21 @@ class GaitWizardApp:
         for key in ("therapist", "institution", "report_lang"):
             save_config_value(CONFIG_SECTION, key, fields[key])
         state = load_state(self.session.path)
-        state.update(cameras=cameras, source_dir=str(self.source_dir), **fields)
+        state.update(
+            cameras=cameras,
+            coronal_cameras=coronal_cameras,
+            source_dir=str(self.source_dir),
+            **fields,
+        )
         save_state(self.session.path, state)
         self.session.state = state
         info = report_info(state, self.session.name)
 
         for w in self.progress_frame.winfo_children():
             w.destroy()
+        n_cams = len(cameras) + len(coronal_cameras)
         labels = (
-            f"Detectar o corpo em {len(cameras)} câmera(s) — a parte mais demorada",
+            f"Detectar o corpo em {n_cams} câmera(s) — a parte mais demorada",
             "Encontrar os passos e as fases da marcha",
             "Calcular os ângulos e gerar o vídeo com os ângulos (MP Angles)",
             "Montar o relatório para imprimir (PDF)",
@@ -1210,6 +1376,7 @@ class GaitWizardApp:
                     log=lambda m: self._events.put(("log", m)),
                     stage=lambda i: self._events.put(("stage", i)),
                     info=info,
+                    coronal_cameras=coronal_cameras,
                 )
                 self._events.put(("done", gait))
             except Exception as exc:  # noqa: BLE001 - shown to the user
