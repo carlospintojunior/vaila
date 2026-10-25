@@ -6,8 +6,8 @@ Author: Paulo R. P. Santiago
 Email: paulosantiago@usp.br
 GitHub: https://github.com/vaila-multimodaltoolbox/vaila
 Creation Date: 31 March 2025
-Update Date: 24 September 2026
-Version: 0.4.5
+Update Date: 17 October 2026
+Version: 0.4.9
 Python Version: 3.12.14
 
 Description:
@@ -2285,12 +2285,53 @@ _JOINT_ANGLE_KEYS = {
     "mid_hip": "trunk",
 }
 
+# Minimum set of landmarks that must be present for a frame to be worth a
+# stick-figure panel (hips/knees/shoulders draw the main body shape).
+_STICK_CORE_LANDMARKS = (
+    "left_shoulder",
+    "right_shoulder",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+)
+
+
+def _frames_with_person(df, start_col, name_to_idx, num_frames, n):
+    """Indices of ``num_frames`` frames evenly spread among those with a person visible.
+
+    Falls back to evenly spread frames over the whole range if the core
+    landmarks are unavailable (e.g. too few columns) or none of the frames
+    have them.
+    """
+    data = df.to_numpy(dtype=float)
+    valid = np.ones(n, dtype=bool)
+    checked_any = False
+    for name in _STICK_CORE_LANDMARKS:
+        idx = name_to_idx.get(name, -1)
+        c0 = start_col + idx * 2
+        c1 = c0 + 1
+        if idx < 0 or c1 >= data.shape[1]:
+            continue
+        valid &= np.isfinite(data[:, c0]) & np.isfinite(data[:, c1])
+        checked_any = True
+    valid_idx = np.flatnonzero(valid) if checked_any else np.arange(n)
+    if len(valid_idx) == 0:
+        valid_idx = np.arange(n)
+    k = min(num_frames, len(valid_idx))
+    pick = np.linspace(0, len(valid_idx) - 1, k, dtype=int)
+    return valid_idx[pick]
+
 
 def plot_stick_sequence_mpangles(df, output_path, num_frames=8, rel_df=None, abs_df=None):
     """
     Plot stick figure sequence: colored segments (left=blue, right=red, center=gray),
     green joint circles, and angle values at joints when rel_df is provided.
     Adds neck segment (mid_ear to mid_shoulder) for head/neck.
+
+    Frames are sampled evenly among those where hips/knees/shoulders are
+    present, so a frame with nobody in view (common right after the person
+    enters/leaves the image) is not wasted on a blank panel.
     """
     if not _HAS_MPL:
         return None
@@ -2306,7 +2347,7 @@ def plot_stick_sequence_mpangles(df, output_path, num_frames=8, rel_df=None, abs
         else 0
     )
     name_to_idx = {name: i for i, name in enumerate(_STICK_LANDMARK_NAMES)}
-    frames_idx = np.linspace(0, n - 1, min(num_frames, n), dtype=int)
+    frames_idx = _frames_with_person(df, start_col, name_to_idx, num_frames, n)
     n_plot = len(frames_idx)
     ncols = min(4, n_plot)
     nrows = (n_plot + ncols - 1) // ncols

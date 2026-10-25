@@ -26,8 +26,8 @@
 
   <div class="info-box">
     <strong>Module Information:</strong><br>
-    Category: Utils | File: vaila/mpangles.py | Version: 0.3.114<br>
-    Updated: 25 August 2026<br>
+    Category: Utils | File: vaila/mpangles.py | Version: 0.4.9<br>
+    Updated: 17 October 2026<br>
     Author: Paulo R. P. Santiago | Update: 02 August 2026 | License: AGPL v3.0
   </div>
 
@@ -42,7 +42,7 @@
     <li><strong>Absolute Angles:</strong> Left side -180° to +180°, right side 0° to 360° in the video overlay. All segments: trunk, neck, thigh, shank, foot, upper arm, forearm, hand.</li>
     <li><strong>Relative Angles:</strong> Joint angles (shoulder, elbow, wrist, hip, knee, ankle, neck, trunk). Neck (relative) is shown at the top center of the video.</li>
     <li><strong>Smoothing (optional):</strong> Section “Smoothing (optional)” with a clear checkbox: “Apply Butterworth low-pass filter (smooth joint trajectories)”. Hint: “Use when data is noisy; leave unchecked for raw angles.” Cutoff (Hz), Order, and FPS are always editable.</li>
-    <li><strong>HTML Report:</strong> Contains an <strong>Angles</strong> table (preview of relative angles CSV) and a <strong>Pose sequence (stick figures)</strong> PNG — no embedded video. For directory runs, <strong>batch_analysis_report.html</strong> lists all processed videos with links to reports and output videos.</li>
+    <li><strong>HTML Report:</strong> Contains an <strong>Angles</strong> table (preview of relative angles CSV) and a <strong>Pose sequence (stick figures)</strong> PNG — no embedded video; frames are sampled among those where hips/knees/shoulders are detected, so a frame with nobody in view is not wasted on a blank panel. For directory runs, <strong>batch_analysis_report.html</strong> lists all processed videos with links to reports and output videos.</li>
     <li><strong>Video overlay:</strong> Skeleton and angle values in corners; angle values at joints on the figure.</li>
   </ul>
 
@@ -178,6 +178,6 @@ python -m vaila.mpangles -i /path/to/dir --filter --cutoff 6.0 --order 4 --fps 3
   </ul>
 
   <hr>
-  <p><small>Last Updated: 02 August 2026 | Part of vailá - Multimodal Toolbox</small></p>
+  <p><small>Last Updated: 17 October 2026 | Part of vailá - Multimodal Toolbox</small></p>
 </body>
 </html>

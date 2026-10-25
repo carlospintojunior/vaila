@@ -4,7 +4,7 @@
 
 - **Category:** Tools
 - **File:** `vaila/gait_wizard.py`
-- **Version:** 0.4.8
+- **Version:** 0.4.9
 - **GUI Interface:** ✅ Yes (button **Marcha Fácil**, `C_B_r6_c3`)
 - **CLI Interface:** ⚠️ Partial (`uv run python vaila/gait_wizard.py [sessions_root]` opens the GUI on that folder)
 - **Language:** the wizard's screens are in **Portuguese** (first version)
@@ -24,13 +24,18 @@ button per screen and no file dialogs or settings to understand:
 2. **Corte** — **Cut Cameras** opens with the session already loaded; when the
    cut finishes, the wizard moves on by itself. The user can also reuse a
    previous cut or analyse the whole video.
-3. **Processamento** — the user ticks the cameras that see the person **from
-   the side** (remembered for next time), optionally types a participant
-   name/code and clicks **Analisar**. A checklist shows each stage in plain
-   language with the elapsed time:
+3. **Processamento** — for each camera the user picks a role (remembered for
+   next time): **Lateral** (sees the person from the side — goes through
+   gait-event/cycle detection), **Coronal (de frente)** (frontal camera — only
+   gets a skeleton + angles pass, no gait events: a front view has no
+   sideways walking pass to detect — plus pelvic obliquity and knee
+   valgus/varus, estimated from the frontal-view landmarks), or **Não usar**.
+   The user also types a participant name/code and clicks **Analisar**. A
+   checklist shows each stage in plain language with the elapsed time:
    MediaPipe pose → gait events and phases (`vaila/gait_auto.py` logic:
-   Zeni heel-strike / toe-off) → joint angles and the **MP Angles video**
-   (skeleton + angles drawn over the person) → report.
+   Zeni heel-strike / toe-off, lateral cameras only) → joint angles and the
+   **MP Angles video** (skeleton + angles drawn over the person, every
+   analysed camera including the coronal one) → report.
 4. **Resultados** — big numbers (cadence, stance %, swing %, stride time,
    left/right symmetry) with one-line explanations, hip / knee / ankle angles
    over the gait cycle (mean ± SD per side, toe-off marked), and plain advice
@@ -69,6 +74,7 @@ gait_analysis_YYYYMMDD_HHMMSS/
     joint_angles_cycle.png    hip / knee / ankle over the gait cycle
     angles/angles_<video>.mp4 skeleton + angles video per camera (H.264)
     angles/                   MP Angles CSVs per camera (_rel, _abs_180, _abs_360)
+    angles/<video>_frontal.csv  coronal camera only: pelvic obliquity, knee valgus/varus per frame
     mediapipe/                MediaPipe outputs (CSVs, annotated video)
 ```
 
@@ -100,6 +106,6 @@ Screenshots and results of the first real-data test: [`docs/gait_wizard/README.m
 
 ---
 
-📅 **Updated:** 12/10/2026
+📅 **Updated:** 17/10/2026
 🔗 **Part of _vailá_ - Multimodal Toolbox**
 🌐 [GitHub Repository](https://github.com/vaila-multimodaltoolbox/vaila)
