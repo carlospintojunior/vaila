@@ -30,7 +30,7 @@ entry "TAREFA 1b".
 | 2 (Cut Cameras opened by the wizard with the session already loaded) | ![](2b_cut_cameras.png) |
 | 3 Processamento: running (plain-language checklist, elapsed time) | ![](3_processamento.png) |
 | 4 Resultados (the big button plays the MP Angles video) | ![](4_resultados.png) |
-| MP Angles video (frame), opened from the results screen | ![](5_video_mp_angles.jpg) |
+| MP Angles video (frame), opened from the results screen | (image removed: it showed a participant) |
 
 ## End-to-end result (`trial01_20261010_095143`, cut 1–15 s)
 
