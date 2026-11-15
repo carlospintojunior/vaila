@@ -30,6 +30,8 @@ This checkout (`carlospintojunior/vaila`) is a **fork**, not the original projec
 
 **No machine-local AI memory:** the user works on this repo from more than one computer. Never store preferences, rules or session notes only in places outside the repo (e.g. Claude Code's `~/.claude/projects/.../memory/`). Put conventions in this file or `AGENTS.md`, session notes and open to-dos in `docs/claude-session-notes-archive.md`, and commit + push them.
 
+**Private, non-technical notes** (partnerships, correspondence, institutional plans, personal to-dos) must never go in this public repo. They live in the user's private Claude Docs doc **"Caderno de projetos"**, tab **"vailá – integração e parcerias"** (https://claude.ai/artifact/DVPmsQSGr15mwRf3fuEUkg). Read it via the Claude Docs connector before handling those topics, and update it there.
+
 ---
 
 ## Astral Toolchain
